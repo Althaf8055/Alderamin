@@ -49,6 +49,7 @@ ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
 # Bot state
 bot_active = True
 request_count = 0
+pending_requests = {}  # Track pending requests: {(user_id, doi): task}
 
 def init_db():
     """Initialize SQLite database."""
@@ -350,6 +351,16 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Check if user is admin (admins bypass all rate limits)
     is_user_admin = await is_admin(context, chat.id, user.id)
 
+    # Check if there's a pending request for this user+DOI combination
+    key = (user.id, doi.lower())
+    if key in pending_requests:
+        log_status("REJECTED", user_name, user.id, doi, "Pending request (wait 8s)")
+        asyncio.create_task(delete_and_warn(
+            context, msg, chat.id, user.id, user_name,
+            "لطفاً ۸ ثانیه صبر کنید تا درخواست قبلی شما ثبت شود"
+        ))
+        return
+
     # RULE 4: Duplicate DOI check (same user, same day) - skip for admins
     if not is_user_admin and has_duplicate_doi_today(user.id, doi):
         log_status("REJECTED", user_name, user.id, doi, "Duplicate DOI")
@@ -373,9 +384,9 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     admin_badge = " [ADMIN]" if is_user_admin else ""
     log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
     
-    # Wait 5 seconds before logging to database
-    # If message is deleted by another bot, this task will be cancelled
-    asyncio.create_task(delayed_log_request(msg.message_id, chat.id, user.id, doi, context))
+    # Create delayed logging task and track it
+    task = asyncio.create_task(delayed_log_request(msg.message_id, chat.id, user.id, doi, context))
+    pending_requests[key] = task
 
 async def delete_and_warn(context, message, chat_id, user_id, user_name, warning_text):
     """Delete and warn asynchronously."""
@@ -396,20 +407,27 @@ async def delete_and_warn(context, message, chat_id, user_id, user_name, warning
 
 async def delayed_log_request(message_id: int, chat_id: int, user_id: int, doi: str, context: ContextTypes.DEFAULT_TYPE):
     """Log request after delay to avoid race conditions with anti-spam bots."""
+    global pending_requests
+    
+    key = (user_id, doi.lower())
+    
     try:
-        # Wait 5 seconds
-        await asyncio.sleep(5)
+        # Wait 8 seconds to let other bots delete the message if needed
+        await asyncio.sleep(8)
         
-        # Check if message still exists (not deleted by another bot)
-        try:
-            await context.bot.get_chat(chat_id)  # Verify bot still has access
-            # If we reach here, message likely survived, so log it
-            log_user_request(user_id, doi)
-            print(f"✓ Logged request for user {user_id}: {doi}")
-        except Exception as e:
-            print(f"⚠️ Message may have been deleted, skipping log: {e}")
+        # After the delay, log the request
+        log_user_request(user_id, doi)
+        print(f"✓ Logged request for user {user_id}: {doi} after 8s delay")
+        
+    except asyncio.CancelledError:
+        # Task was cancelled (shouldn't happen normally, but handle it)
+        print(f"⚠️ Logging cancelled for user {user_id}: {doi}")
     except Exception as e:
         print(f"Error in delayed_log_request: {e}")
+    finally:
+        # Remove from pending requests
+        if key in pending_requests:
+            del pending_requests[key]
 
 def main() -> None:
     """Run bot."""
