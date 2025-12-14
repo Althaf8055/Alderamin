@@ -368,23 +368,11 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ))
         return
 
-    # VALID request — but confirm message was not deleted by another bot
-    try:
-        # silent reply just to confirm message existence
-        await msg.reply_text("✅ Request received", quote=True)
-        
-        # If we reach here → message exists → safe to log
-        log_user_request(user.id, doi)
-        request_count += 1
-    
-        admin_badge = " [ADMIN]" if is_user_admin else ""
-        log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
-    
-    except Exception:
-        # Message was deleted by another bot → DO NOT log
-        log_status("IGNORED", user_name, user.id, doi, "Message auto-deleted by gate bot")
-        return
-
+    # VALID request (ONLY here we count)
+    log_user_request(user.id, doi)
+    request_count += 1
+    admin_badge = " [ADMIN]" if is_user_admin else ""
+    log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
 
 async def delete_and_warn(context, message, chat_id, user_id, user_name, warning_text):
     """Delete and warn asynchronously."""
