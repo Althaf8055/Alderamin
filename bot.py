@@ -20,15 +20,15 @@ DOI_REGEX = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 DOI_URL_REGEX = re.compile(r"https?://(dx\.)?doi\.org/(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 CLEANUP_REGEX = re.compile(r"\bdoi\s*:\s*|[^\w]", re.IGNORECASE)
 
-# IEEE and ScienceDirect link patterns (that may contain DOI in URL)
-DIRECT_LINK_WITH_DOI_REGEX = re.compile(
-    r"https?://(ieeexplore\.ieee\.org|sciencedirect\.com)/.*?(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
+# IEEE link patterns (that may contain DOI in URL)
+IEEE_LINK_WITH_DOI_REGEX = re.compile(
+    r"https?://ieeexplore\.ieee\.org/.*?(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
     re.IGNORECASE
 )
 
-# Direct links without DOI pattern (only IEEE and ScienceDirect)
+# Direct links pattern (IEEE and ScienceDirect)
 DIRECT_LINK_REGEX = re.compile(
-    r"https?://(ieeexplore\.ieee\.org|sciencedirect\.com)/\S+",
+    r"https?://(www\.)?(ieeexplore\.ieee\.org|sciencedirect\.com)/\S+",
     re.IGNORECASE
 )
 
@@ -43,21 +43,21 @@ bot_active = True
 request_count = 0
 
 def extract_dois(text: str) -> list[str]:
-    """Extract unique DOIs from text, including from IEEE/ScienceDirect links only."""
+    """Extract unique DOIs from text, including from IEEE links only."""
     if not text:
         return []
     
     # Extract DOIs from doi.org URLs
     url_dois = [m[1] for m in DOI_URL_REGEX.findall(text)]
     
-    # Extract DOIs from direct article links (IEEE, ScienceDirect only)
-    direct_link_dois = [m[1] for m in DIRECT_LINK_WITH_DOI_REGEX.findall(text)]
+    # Extract DOIs from IEEE links only (ScienceDirect uses PII, not DOI in URL)
+    ieee_link_dois = [m[1] for m in IEEE_LINK_WITH_DOI_REGEX.findall(text)]
     
     # Extract plain DOIs from text
     plain_dois = DOI_REGEX.findall(text)
     
     # Combine all DOIs
-    all_dois = url_dois + direct_link_dois + plain_dois
+    all_dois = url_dois + ieee_link_dois + plain_dois
     
     # Deduplicate (case-insensitive)
     seen = set()
@@ -71,7 +71,7 @@ def extract_dois(text: str) -> list[str]:
     return unique
 
 def has_direct_link_without_doi(text: str) -> bool:
-    """Check if message contains IEEE/ScienceDirect links WITHOUT any DOI (embedded or separate)."""
+    """Check if message contains IEEE/ScienceDirect links WITHOUT any DOI."""
     if not text:
         return False
     
@@ -80,7 +80,9 @@ def has_direct_link_without_doi(text: str) -> bool:
     if not direct_links:
         return False
     
-    # Check if there are any DOIs anywhere in the message (embedded or separate)
+    # Check if there are any DOIs anywhere in the message
+    # For IEEE: DOI can be embedded in URL or separate
+    # For ScienceDirect: DOI must be separate (URLs use PII)
     dois = extract_dois(text)
     
     # If there are direct links but NO DOI anywhere, return True (violation)
@@ -310,7 +312,7 @@ def main() -> None:
     print("="*70)
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
-    print(f"   Direct link check: IEEE, ScienceDirect only")
+    print(f"   Direct link check: IEEE, ScienceDirect")
     print(f"   Language: Any English text required")
     print(f"   Bot status: {'ACTIVE' if bot_active else 'INACTIVE'}")
     print(f"   Admin commands: /start, /stop")
