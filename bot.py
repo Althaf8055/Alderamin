@@ -8,7 +8,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, Con
 # Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
-WARNING_TTL = 60*5
+WARNING_TTL = 60
 
 # Parse group IDs from comma-separated string
 TARGET_GROUP_IDS = []
@@ -20,7 +20,13 @@ DOI_REGEX = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 DOI_URL_REGEX = re.compile(r"https?://(dx\.)?doi\.org/(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 CLEANUP_REGEX = re.compile(r"\bdoi\s*:\s*|[^\w]", re.IGNORECASE)
 
-# IEEE and other direct article link patterns
+# IEEE and other direct article link patterns (that may contain DOI in URL)
+DIRECT_LINK_WITH_DOI_REGEX = re.compile(
+    r"https?://(ieeexplore\.ieee\.org|dl\.acm\.org|link\.springer\.com|sciencedirect\.com)/.*?(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
+    re.IGNORECASE
+)
+
+# Direct links without DOI pattern
 DIRECT_LINK_REGEX = re.compile(
     r"https?://(ieeexplore\.ieee\.org|dl\.acm\.org|link\.springer\.com|sciencedirect\.com|arxiv\.org)/\S+",
     re.IGNORECASE
@@ -37,14 +43,23 @@ bot_active = True
 request_count = 0
 
 def extract_dois(text: str) -> list[str]:
-    """Extract unique DOIs from text."""
+    """Extract unique DOIs from text, including from direct article links."""
     if not text:
         return []
     
+    # Extract DOIs from doi.org URLs
     url_dois = [m[1] for m in DOI_URL_REGEX.findall(text)]
+    
+    # Extract DOIs from direct article links (Springer, IEEE, ACM, etc.)
+    direct_link_dois = [m[1] for m in DIRECT_LINK_WITH_DOI_REGEX.findall(text)]
+    
+    # Extract plain DOIs from text
     plain_dois = DOI_REGEX.findall(text)
     
-    all_dois = url_dois + plain_dois
+    # Combine all DOIs
+    all_dois = url_dois + direct_link_dois + plain_dois
+    
+    # Deduplicate (case-insensitive)
     seen = set()
     unique = []
     for doi in all_dois:
@@ -56,20 +71,20 @@ def extract_dois(text: str) -> list[str]:
     return unique
 
 def has_direct_link_without_doi(text: str) -> bool:
-    """Check if message contains direct article links WITHOUT a separate DOI."""
+    """Check if message contains direct article links WITHOUT any DOI (embedded or separate)."""
     if not text:
         return False
     
+    # Check if there are any direct links
     direct_links = DIRECT_LINK_REGEX.findall(text)
     if not direct_links:
         return False
     
-    has_doi_org = DOI_URL_REGEX.search(text) is not None
+    # Check if there are any DOIs anywhere in the message (embedded or separate)
+    dois = extract_dois(text)
     
-    text_without_direct_links = DIRECT_LINK_REGEX.sub("", text)
-    has_plain_doi = DOI_REGEX.search(text_without_direct_links) is not None
-    
-    return not (has_doi_org or has_plain_doi)
+    # If there are direct links but NO DOI anywhere, return True (violation)
+    return len(dois) == 0
 
 def has_only_persian_text(text: str, dois: list[str]) -> bool:
     """Check if message contains only DOI and Persian text (no English at all)."""
@@ -206,7 +221,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     user_name = user.first_name or "Unknown"
     
-    # RULE 0: Check for direct links WITHOUT separate DOI (highest priority)
+    # RULE 0: Check for direct links WITHOUT any DOI (highest priority)
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
         asyncio.create_task(delete_and_warn(
@@ -295,7 +310,7 @@ def main() -> None:
     print("="*70)
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
-    print(f"   Direct links: Allowed only WITH DOI")
+    print(f"   Direct links: Allowed WITH embedded DOI")
     print(f"   Language: Any English text required")
     print(f"   Bot status: {'ACTIVE' if bot_active else 'INACTIVE'}")
     print(f"   Admin commands: /start, /stop")
