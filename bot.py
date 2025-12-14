@@ -56,6 +56,13 @@ def extract_dois(text: str) -> list[str]:
     # Extract plain DOIs from text
     plain_dois = DOI_REGEX.findall(text)
     
+    # Debug logging
+    if url_dois or link_dois or plain_dois:
+        print(f"🔍 DOI Debug:")
+        print(f"   url_dois: {url_dois}")
+        print(f"   link_dois: {link_dois}")
+        print(f"   plain_dois: {plain_dois}")
+    
     # Combine all DOIs
     all_dois = url_dois + link_dois + plain_dois
     
@@ -68,6 +75,8 @@ def extract_dois(text: str) -> list[str]:
         if doi_normalized not in seen:
             seen.add(doi_normalized)
             unique.append(doi)
+    
+    print(f"   Final unique DOIs: {unique}")
     
     return unique
 
