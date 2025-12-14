@@ -22,7 +22,7 @@ CLEANUP_REGEX = re.compile(r"\bdoi\s*:\s*|[^\w]", re.IGNORECASE)
 
 # DOI embedded in any URL path (generalized for all publishers)
 DOI_IN_URL_REGEX = re.compile(
-    r"https?://[^\s/]+/.*?(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
+    r"https?://[^\s/]+/[^\s]*(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
     re.IGNORECASE
 )
 
@@ -56,27 +56,23 @@ def extract_dois(text: str) -> list[str]:
     # Extract plain DOIs from text
     plain_dois = DOI_REGEX.findall(text)
     
-    # Debug logging
-    if url_dois or link_dois or plain_dois:
-        print(f"🔍 DOI Debug:")
-        print(f"   url_dois: {url_dois}")
-        print(f"   link_dois: {link_dois}")
-        print(f"   plain_dois: {plain_dois}")
-    
     # Combine all DOIs
     all_dois = url_dois + link_dois + plain_dois
     
-    # Deduplicate (case-insensitive) - normalize by removing trailing slashes and lowercase
+    # Deduplicate and validate
     seen = set()
     unique = []
     for doi in all_dois:
         # Normalize: lowercase and remove trailing slash
         doi_normalized = doi.lower().rstrip('/')
+        
+        # Validate: DOI must have format 10.XXXX/something (at least 4 digits after 10.)
+        if not re.match(r'^10\.\d{4,9}/.+', doi_normalized):
+            continue
+            
         if doi_normalized not in seen:
             seen.add(doi_normalized)
             unique.append(doi)
-    
-    print(f"   Final unique DOIs: {unique}")
     
     return unique
 
