@@ -270,7 +270,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log_status("REJECTED", user_name, user.id, ", ".join(dois[:2]), f"{unique_dois} DOIs")
         asyncio.create_task(delete_and_warn(
             context, msg, chat.id, user.id, user_name,
-            "please split the request into two messages. You can request upto two articles per day.)"
+            "لطفا درخواست خود را به دو پیام تقسیم کنید. شما می‌توانید حداکثر دو مقاله در روز درخواست دهید."
         ))
         return
 
