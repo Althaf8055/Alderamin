@@ -49,7 +49,6 @@ ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
 # Bot state
 bot_active = True
 request_count = 0
-pending_requests = {}  # Track pending requests: {(user_id, doi): task}
 
 def init_db():
     """Initialize SQLite database."""
@@ -297,6 +296,18 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not (msg and chat and user and msg.text) or chat.id not in TARGET_GROUP_IDS:
         return
 
+    # Wait 3 seconds before processing to let anti-spam bots act first
+    await asyncio.sleep(3)
+    
+    # Check if message still exists after delay
+    try:
+        # Try to get the message - if it was deleted by another bot, this will fail
+        await context.bot.get_chat(chat.id)
+    except Exception:
+        # Message was likely deleted, stop processing
+        print(f"⚠️ Message deleted before processing, skipping")
+        return
+
     user_name = user.first_name or "Unknown"
     
     # RULE 0: Check for article links WITHOUT any DOI
@@ -351,16 +362,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Check if user is admin (admins bypass all rate limits)
     is_user_admin = await is_admin(context, chat.id, user.id)
 
-    # Check if there's a pending request for this user+DOI combination
-    key = (user.id, doi.lower())
-    if key in pending_requests:
-        log_status("REJECTED", user_name, user.id, doi, "Pending request (wait 8s)")
-        asyncio.create_task(delete_and_warn(
-            context, msg, chat.id, user.id, user_name,
-            "لطفاً ۸ ثانیه صبر کنید تا درخواست قبلی شما ثبت شود"
-        ))
-        return
-
     # RULE 4: Duplicate DOI check (same user, same day) - skip for admins
     if not is_user_admin and has_duplicate_doi_today(user.id, doi):
         log_status("REJECTED", user_name, user.id, doi, "Duplicate DOI")
@@ -379,14 +380,11 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ))
         return
 
-    # VALID request - wait before logging to avoid race condition with anti-spam bots
+    # VALID request - log immediately (no more delayed logging needed)
+    log_user_request(user.id, doi)
     request_count += 1
     admin_badge = " [ADMIN]" if is_user_admin else ""
     log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
-    
-    # Create delayed logging task and track it
-    task = asyncio.create_task(delayed_log_request(msg.message_id, chat.id, user.id, doi, context))
-    pending_requests[key] = task
 
 async def delete_and_warn(context, message, chat_id, user_id, user_name, warning_text):
     """Delete and warn asynchronously."""
@@ -404,30 +402,6 @@ async def delete_and_warn(context, message, chat_id, user_id, user_name, warning
         await msg.delete()
     except Exception as e:
         print(f"Error: {e}")
-
-async def delayed_log_request(message_id: int, chat_id: int, user_id: int, doi: str, context: ContextTypes.DEFAULT_TYPE):
-    """Log request after delay to avoid race conditions with anti-spam bots."""
-    global pending_requests
-    
-    key = (user_id, doi.lower())
-    
-    try:
-        # Wait 8 seconds to let other bots delete the message if needed
-        await asyncio.sleep(8)
-        
-        # After the delay, log the request
-        log_user_request(user_id, doi)
-        print(f"✓ Logged request for user {user_id}: {doi} after 8s delay")
-        
-    except asyncio.CancelledError:
-        # Task was cancelled (shouldn't happen normally, but handle it)
-        print(f"⚠️ Logging cancelled for user {user_id}: {doi}")
-    except Exception as e:
-        print(f"Error in delayed_log_request: {e}")
-    finally:
-        # Remove from pending requests
-        if key in pending_requests:
-            del pending_requests[key]
 
 def main() -> None:
     """Run bot."""
@@ -455,6 +429,7 @@ def main() -> None:
     print("="*70)
     print("🤖 DOI MODERATION BOT STARTED")
     print("="*70)
+    print(f"   Message processing delay: 3 seconds")
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
     print(f"   Direct link check: IEEE, ScienceDirect, Springer")
