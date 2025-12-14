@@ -296,33 +296,26 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not (msg and chat and user and msg.text) or chat.id not in TARGET_GROUP_IDS:
         return
 
-    # Wait 5 seconds before processing to let anti-spam bots act first
-    # This gives anti-spam bots time to delete messages from unverified users
-    # If message survives 5 seconds, it's from a verified user
-    await asyncio.sleep(5)
-
     user_name = user.first_name or "Unknown"
     
     # RULE 0: Check for article links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
-        try:
-            asyncio.create_task(delete_and_warn(
-                context, msg, chat.id, user.id, user_name,
-                "لطفاً عنوان مقاله و doi مقاله را در درخواست خود اضافه کنید"
-            ))
-        except Exception as e:
-            print(f"⚠️ Could not delete message (already deleted?): {e}")
+        asyncio.create_task(delete_and_warn(
+            context, msg, chat.id, user.id, user_name,
+            "لطفاً عنوان مقاله و doi مقاله را در درخواست خود اضافه کنید"
+        ))
         return
 
     dois = extract_dois(msg.text)
     
+    # Debug: print what we found
+    if dois:
+        print(f"🔍 DEBUG: Found {len(dois)} DOI(s): {dois}")
+        print(f"🔍 DEBUG: Message text: {msg.text[:100]}")
+    
     if not dois:
         return
-    
-    # Debug: print what we found
-    print(f"🔍 DEBUG: Found {len(dois)} DOI(s): {dois}")
-    print(f"🔍 DEBUG: Message text: {msg.text[:100]}")
 
     # RULE 1: Check for Persian-only text (before checking if DOI-only)
     if has_only_persian_text(msg.text, dois):
@@ -375,15 +368,26 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ))
         return
 
-    # VALID request
-    log_user_request(user.id, doi)
-    request_count += 1
-    admin_badge = " [ADMIN]" if is_user_admin else ""
-    log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
-    print(f"📝 Logged to database: user={user.id}, doi={doi}")
+    # VALID request — but confirm message was not deleted by another bot
+    try:
+        # silent reply just to confirm message existence
+        await msg.reply_text("✅ Request received", quote=True)
+        
+        # If we reach here → message exists → safe to log
+        log_user_request(user.id, doi)
+        request_count += 1
+    
+        admin_badge = " [ADMIN]" if is_user_admin else ""
+        log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
+    
+    except Exception:
+        # Message was deleted by another bot → DO NOT log
+        log_status("IGNORED", user_name, user.id, doi, "Message auto-deleted by gate bot")
+        return
+
 
 async def delete_and_warn(context, message, chat_id, user_id, user_name, warning_text):
-    """Delete and warn asynchronously. Returns True if successful, False if message already deleted."""
+    """Delete and warn asynchronously."""
     try:
         await message.delete()
         
@@ -396,11 +400,8 @@ async def delete_and_warn(context, message, chat_id, user_id, user_name, warning
         
         await asyncio.sleep(WARNING_TTL)
         await msg.delete()
-        return True
     except Exception as e:
-        # Message was already deleted by anti-spam bot
-        print(f"⚠️ Message already deleted by anti-spam bot: {e}")
-        return False
+        print(f"Error: {e}")
 
 def main() -> None:
     """Run bot."""
@@ -428,7 +429,6 @@ def main() -> None:
     print("="*70)
     print("🤖 DOI MODERATION BOT STARTED")
     print("="*70)
-    print(f"   Message processing delay: 5 seconds")
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
     print(f"   Direct link check: IEEE, ScienceDirect, Springer")
