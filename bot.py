@@ -1,7 +1,9 @@
 import re
 import asyncio
 import os
-from datetime import datetime
+import sqlite3
+import time
+from datetime import datetime, timedelta, timezone
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
@@ -14,6 +16,11 @@ WARNING_TTL = 60*10
 TARGET_GROUP_IDS = []
 if GROUP_IDS_STR:
     TARGET_GROUP_IDS = [int(gid.strip()) for gid in GROUP_IDS_STR.split(",") if gid.strip()]
+
+# Daily limit configuration
+DB_PATH = os.getenv("DB_PATH", "requests.db")
+MAX_REQUESTS_PER_DAY = 2
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # Compiled regex patterns
 DOI_REGEX = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
@@ -42,6 +49,69 @@ ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
 # Bot state
 bot_active = True
 request_count = 0
+
+def init_db():
+    """Initialize SQLite database."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS requests (
+            user_id INTEGER,
+            doi TEXT,
+            ts INTEGER
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def today_4am_ist_timestamp():
+    """Get timestamp of today's 4 AM IST (or yesterday's if it's before 4 AM now)."""
+    now = datetime.now(IST)
+    four_am = now.replace(hour=4, minute=0, second=0, microsecond=0)
+
+    if now < four_am:
+        four_am -= timedelta(days=1)
+
+    return int(four_am.timestamp())
+
+def user_request_count(user_id: int) -> int:
+    """Count user's valid requests since 4 AM IST today."""
+    since = today_4am_ist_timestamp()
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) FROM requests WHERE user_id = ? AND ts >= ?",
+        (user_id, since)
+    )
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+def has_duplicate_doi_today(user_id: int, doi: str) -> bool:
+    """Check if user has already requested this DOI since 4 AM IST today."""
+    since = today_4am_ist_timestamp()
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT 1 FROM requests WHERE user_id = ? AND doi = ? AND ts >= ? LIMIT 1",
+        (user_id, doi.lower(), since)
+    )
+    exists = c.fetchone() is not None
+    conn.close()
+    return exists
+
+def log_user_request(user_id: int, doi: str):
+    """Log a valid user request to the database."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO requests (user_id, doi, ts) VALUES (?, ?, ?)",
+        (user_id, doi.lower(), int(time.time()))
+    )
+    conn.commit()
+    conn.close()
 
 def extract_dois(text: str) -> list[str]:
     """Extract unique DOIs from text, including from any links."""
@@ -277,9 +347,32 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     doi = dois[0]
 
-    # Valid request
+    # Check if user is admin (admins bypass all rate limits)
+    is_user_admin = await is_admin(context, chat.id, user.id)
+
+    # RULE 4: Duplicate DOI check (same user, same day) - skip for admins
+    if not is_user_admin and has_duplicate_doi_today(user.id, doi):
+        log_status("REJECTED", user_name, user.id, doi, "Duplicate DOI")
+        asyncio.create_task(delete_and_warn(
+            context, msg, chat.id, user.id, user_name,
+            "شما قبلاً این مقاله را امروز درخواست کرده‌اید"
+        ))
+        return
+
+    # RULE 5: Daily limit check (only for valid requests) - skip for admins
+    if not is_user_admin and user_request_count(user.id) >= MAX_REQUESTS_PER_DAY:
+        log_status("REJECTED", user_name, user.id, doi, "Daily limit reached")
+        asyncio.create_task(delete_and_warn(
+            context, msg, chat.id, user.id, user_name,
+            "روزانه فقط دو مقاله میتونید درخواست بدین"
+        ))
+        return
+
+    # VALID request (ONLY here we count)
+    log_user_request(user.id, doi)
     request_count += 1
-    log_status("VALID", user_name, user.id, doi, f"Request #{request_count}")
+    admin_badge = " [ADMIN]" if is_user_admin else ""
+    log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
 
 async def delete_and_warn(context, message, chat_id, user_id, user_name, warning_text):
     """Delete and warn asynchronously."""
@@ -308,6 +401,9 @@ def main() -> None:
         print("❌ ERROR: GROUP_IDS environment variable not set!")
         return
     
+    # Initialize database
+    init_db()
+    
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start_command))
@@ -325,7 +421,11 @@ def main() -> None:
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
     print(f"   Direct link check: IEEE, ScienceDirect, Springer")
     print(f"   Language: Any English text required")
+    print(f"   Daily limit: {MAX_REQUESTS_PER_DAY} requests per user")
+    print(f"   Duplicate DOI: Blocked per user per day")
+    print(f"   Reset time: 4:00 AM IST")
     print(f"   Bot status: {'ACTIVE' if bot_active else 'INACTIVE'}")
+    print(f"   Admin bypass: Enabled (no limits for admins)")
     print(f"   Admin commands: /start, /stop")
     print("="*70)
     print()
