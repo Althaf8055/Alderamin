@@ -32,6 +32,12 @@ DIRECT_LINK_REGEX = re.compile(
     re.IGNORECASE
 )
 
+# ACM link pattern (to check and reject)
+ACM_LINK_REGEX = re.compile(
+    r"https?://dl\.acm\.org/\S+",
+    re.IGNORECASE
+)
+
 # Persian/Arabic character range
 PERSIAN_REGEX = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+')
 
@@ -43,18 +49,20 @@ bot_active = True
 request_count = 0
 
 def extract_dois(text: str) -> list[str]:
-    """Extract unique DOIs from text, including from direct article links."""
+    """Extract unique DOIs from text, including from IEEE/ScienceDirect links only."""
     if not text:
         return []
     
     # Extract DOIs from doi.org URLs
     url_dois = [m[1] for m in DOI_URL_REGEX.findall(text)]
     
-    # Extract DOIs from direct article links (IEEE, ScienceDirect)
+    # Extract DOIs from direct article links (IEEE, ScienceDirect only)
     direct_link_dois = [m[1] for m in DIRECT_LINK_WITH_DOI_REGEX.findall(text)]
     
-    # Extract plain DOIs from text
-    plain_dois = DOI_REGEX.findall(text)
+    # Extract plain DOIs from text (but NOT from ACM links)
+    # Remove ACM links first before extracting plain DOIs
+    text_without_acm = ACM_LINK_REGEX.sub("", text)
+    plain_dois = DOI_REGEX.findall(text_without_acm)
     
     # Combine all DOIs
     all_dois = url_dois + direct_link_dois + plain_dois
@@ -69,6 +77,23 @@ def extract_dois(text: str) -> list[str]:
             unique.append(doi)
     
     return unique
+
+def has_acm_link_only(text: str) -> bool:
+    """Check if message contains ACM link without separate DOI."""
+    if not text:
+        return False
+    
+    # Check if there's an ACM link
+    has_acm = ACM_LINK_REGEX.search(text) is not None
+    if not has_acm:
+        return False
+    
+    # Remove ACM links and check if there's a DOI elsewhere
+    text_without_acm = ACM_LINK_REGEX.sub("", text)
+    has_separate_doi = DOI_REGEX.search(text_without_acm) is not None or DOI_URL_REGEX.search(text_without_acm) is not None
+    
+    # If has ACM link but no separate DOI, return True (violation)
+    return not has_separate_doi
 
 def has_direct_link_without_doi(text: str) -> bool:
     """Check if message contains IEEE/ScienceDirect links WITHOUT any DOI (embedded or separate)."""
@@ -93,6 +118,7 @@ def has_only_persian_text(text: str, dois: list[str]) -> bool:
     
     cleaned = DOI_URL_REGEX.sub("", text)
     cleaned = DIRECT_LINK_REGEX.sub("", cleaned)
+    cleaned = ACM_LINK_REGEX.sub("", cleaned)
     
     for doi in dois:
         cleaned = cleaned.replace(doi, "").replace(doi.lower(), "")
@@ -118,6 +144,7 @@ def is_doi_only_message(text: str, dois: list[str]) -> bool:
 
     cleaned = DOI_URL_REGEX.sub("", text)
     cleaned = DIRECT_LINK_REGEX.sub("", cleaned)
+    cleaned = ACM_LINK_REGEX.sub("", cleaned)
     
     for doi in dois:
         cleaned = cleaned.replace(doi, "").replace(doi.lower(), "")
@@ -221,7 +248,16 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     user_name = user.first_name or "Unknown"
     
-    # RULE 0: Check for IEEE/ScienceDirect links WITHOUT any DOI (highest priority)
+    # RULE 0a: Check for ACM links without separate DOI (highest priority)
+    if has_acm_link_only(msg.text):
+        log_status("REJECTED", user_name, user.id, "ACM Link (No DOI)", "Missing separate DOI")
+        asyncio.create_task(delete_and_warn(
+            context, msg, chat.id, user.id, user_name,
+            "please include the DOI separately when sharing ACM links."
+        ))
+        return
+    
+    # RULE 0b: Check for IEEE/ScienceDirect links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
         asyncio.create_task(delete_and_warn(
@@ -310,7 +346,7 @@ def main() -> None:
     print("="*70)
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
-    print(f"   Direct link check: IEEE, ScienceDirect only")
+    print(f"   Direct link check: IEEE, ScienceDirect, ACM")
     print(f"   Language: Any English text required")
     print(f"   Bot status: {'ACTIVE' if bot_active else 'INACTIVE'}")
     print(f"   Admin commands: /start, /stop")
