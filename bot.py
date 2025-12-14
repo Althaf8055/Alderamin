@@ -297,21 +297,20 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     message_id = msg.message_id
+    message_text = msg.text
     
     # Wait 3 seconds before processing to let anti-spam bots act first
     await asyncio.sleep(3)
     
-    # Try to check if message still exists by attempting to copy it
+    # Try to check if message still exists by attempting to react to it
     try:
-        # Try to copy the message to the same chat (then immediately delete the copy)
-        # If the original was deleted, this will raise an error
-        copied = await context.bot.copy_message(
+        # Try to set a reaction on the message
+        # If the message was deleted, this will raise an error
+        await context.bot.set_message_reaction(
             chat_id=chat.id,
-            from_chat_id=chat.id,
-            message_id=message_id
+            message_id=message_id,
+            reaction=[]  # Empty reaction (won't show anything)
         )
-        # Delete the copy immediately
-        await context.bot.delete_message(chat_id=chat.id, message_id=copied.message_id)
     except Exception as e:
         # Message was deleted by another bot, stop processing
         print(f"⚠️ Message {message_id} was deleted by anti-spam bot, skipping processing")
