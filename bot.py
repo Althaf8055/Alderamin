@@ -59,13 +59,14 @@ def extract_dois(text: str) -> list[str]:
     # Combine all DOIs
     all_dois = url_dois + link_dois + plain_dois
     
-    # Deduplicate (case-insensitive)
+    # Deduplicate (case-insensitive) - normalize by removing trailing slashes and lowercase
     seen = set()
     unique = []
     for doi in all_dois:
-        doi_lower = doi.lower()
-        if doi_lower not in seen:
-            seen.add(doi_lower)
+        # Normalize: lowercase and remove trailing slash
+        doi_normalized = doi.lower().rstrip('/')
+        if doi_normalized not in seen:
+            seen.add(doi_normalized)
             unique.append(doi)
     
     return unique
@@ -231,6 +232,12 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     dois = extract_dois(msg.text)
+    
+    # Debug: print what we found
+    if dois:
+        print(f"🔍 DEBUG: Found {len(dois)} DOI(s): {dois}")
+        print(f"🔍 DEBUG: Message text: {msg.text[:100]}")
+    
     if not dois:
         return
 
