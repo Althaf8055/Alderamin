@@ -232,7 +232,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
         asyncio.create_task(delete_and_warn(
             context, msg, chat.id, user.id, user_name,
-            "please add the DOI and article title in your request"
+            "لطفاً عنوان مقاله و doi مقاله را در درخواست خود اضافه کنید"
         ))
         return
 
@@ -251,7 +251,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log_status("REJECTED", user_name, user.id, dois[0], "Persian text only")
         asyncio.create_task(delete_and_warn(
             context, msg, chat.id, user.id, user_name,
-            "please add the article title in your request."
+            "لطفاً عنوان مقاله را به درخواست خود اضافه کنید"
         ))
         return
 
@@ -260,7 +260,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log_status("REJECTED", user_name, user.id, dois[0], "No title")
         asyncio.create_task(delete_and_warn(
             context, msg, chat.id, user.id, user_name,
-            "please add the article title in your request."
+            "لطفاً عنوان مقاله را به درخواست خود اضافه کنید"
         ))
         return
 
@@ -270,7 +270,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log_status("REJECTED", user_name, user.id, ", ".join(dois[:2]), f"{unique_dois} DOIs")
         asyncio.create_task(delete_and_warn(
             context, msg, chat.id, user.id, user_name,
-            "لطفا درخواست خود را به دو پیام تقسیم کنید. شما می‌توانید حداکثر دو مقاله در روز درخواست دهید."
+            "لطفاً درخواست خود را به دو پیام جداگانه ارسال کنید. شما می‌توانید حداکثر دو مقاله در روز درخواست کنید"
         ))
         return
 
