@@ -296,16 +296,25 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not (msg and chat and user and msg.text) or chat.id not in TARGET_GROUP_IDS:
         return
 
+    message_id = msg.message_id
+    
     # Wait 3 seconds before processing to let anti-spam bots act first
     await asyncio.sleep(3)
     
-    # Check if message still exists after delay
+    # Try to check if message still exists by attempting to copy it
     try:
-        # Try to get the message - if it was deleted by another bot, this will fail
-        await context.bot.get_chat(chat.id)
-    except Exception:
-        # Message was likely deleted, stop processing
-        print(f"⚠️ Message deleted before processing, skipping")
+        # Try to copy the message to the same chat (then immediately delete the copy)
+        # If the original was deleted, this will raise an error
+        copied = await context.bot.copy_message(
+            chat_id=chat.id,
+            from_chat_id=chat.id,
+            message_id=message_id
+        )
+        # Delete the copy immediately
+        await context.bot.delete_message(chat_id=chat.id, message_id=copied.message_id)
+    except Exception as e:
+        # Message was deleted by another bot, stop processing
+        print(f"⚠️ Message {message_id} was deleted by anti-spam bot, skipping processing")
         return
 
     user_name = user.first_name or "Unknown"
