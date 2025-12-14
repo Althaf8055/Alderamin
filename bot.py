@@ -296,34 +296,23 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not (msg and chat and user and msg.text) or chat.id not in TARGET_GROUP_IDS:
         return
 
-    message_id = msg.message_id
-    
-    # Wait 3 seconds before processing to let anti-spam bots act first
-    await asyncio.sleep(3)
-    
-    # Try to check if message still exists by attempting to react to it
-    try:
-        # Try to set a reaction on the message
-        # If the message was deleted, this will raise an error
-        await context.bot.set_message_reaction(
-            chat_id=chat.id,
-            message_id=message_id,
-            reaction=[]  # Empty reaction (won't show anything)
-        )
-    except Exception as e:
-        # Message was deleted by another bot, stop processing
-        print(f"⚠️ Message {message_id} was deleted by anti-spam bot, skipping processing")
-        return
+    # Wait 5 seconds before processing to let anti-spam bots act first
+    # This gives anti-spam bots time to delete messages from unverified users
+    # If message survives 5 seconds, it's from a verified user
+    await asyncio.sleep(5)
 
     user_name = user.first_name or "Unknown"
     
     # RULE 0: Check for article links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
-        asyncio.create_task(delete_and_warn(
-            context, msg, chat.id, user.id, user_name,
-            "لطفاً عنوان مقاله و doi مقاله را در درخواست خود اضافه کنید"
-        ))
+        try:
+            asyncio.create_task(delete_and_warn(
+                context, msg, chat.id, user.id, user_name,
+                "لطفاً عنوان مقاله و doi مقاله را در درخواست خود اضافه کنید"
+            ))
+        except Exception as e:
+            print(f"⚠️ Could not delete message (already deleted?): {e}")
         return
 
     dois = extract_dois(msg.text)
@@ -386,14 +375,15 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ))
         return
 
-    # VALID request - log immediately (no more delayed logging needed)
+    # VALID request
     log_user_request(user.id, doi)
     request_count += 1
     admin_badge = " [ADMIN]" if is_user_admin else ""
     log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
+    print(f"📝 Logged to database: user={user.id}, doi={doi}")
 
 async def delete_and_warn(context, message, chat_id, user_id, user_name, warning_text):
-    """Delete and warn asynchronously."""
+    """Delete and warn asynchronously. Returns True if successful, False if message already deleted."""
     try:
         await message.delete()
         
@@ -406,8 +396,11 @@ async def delete_and_warn(context, message, chat_id, user_id, user_name, warning
         
         await asyncio.sleep(WARNING_TTL)
         await msg.delete()
+        return True
     except Exception as e:
-        print(f"Error: {e}")
+        # Message was already deleted by anti-spam bot
+        print(f"⚠️ Message already deleted by anti-spam bot: {e}")
+        return False
 
 def main() -> None:
     """Run bot."""
@@ -435,7 +428,7 @@ def main() -> None:
     print("="*70)
     print("🤖 DOI MODERATION BOT STARTED")
     print("="*70)
-    print(f"   Message processing delay: 3 seconds")
+    print(f"   Message processing delay: 5 seconds")
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
     print(f"   Direct link check: IEEE, ScienceDirect, Springer")
