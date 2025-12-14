@@ -20,15 +20,15 @@ DOI_REGEX = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 DOI_URL_REGEX = re.compile(r"https?://(dx\.)?doi\.org/(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 CLEANUP_REGEX = re.compile(r"\bdoi\s*:\s*|[^\w]", re.IGNORECASE)
 
-# IEEE and other direct article link patterns (that may contain DOI in URL)
+# IEEE and ScienceDirect link patterns (that may contain DOI in URL)
 DIRECT_LINK_WITH_DOI_REGEX = re.compile(
-    r"https?://(ieeexplore\.ieee\.org|dl\.acm\.org|link\.springer\.com|sciencedirect\.com)/.*?(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
+    r"https?://(ieeexplore\.ieee\.org|sciencedirect\.com)/.*?(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
     re.IGNORECASE
 )
 
-# Direct links without DOI pattern
+# Direct links without DOI pattern (only IEEE and ScienceDirect)
 DIRECT_LINK_REGEX = re.compile(
-    r"https?://(ieeexplore\.ieee\.org|dl\.acm\.org|link\.springer\.com|sciencedirect\.com|arxiv\.org)/\S+",
+    r"https?://(ieeexplore\.ieee\.org|sciencedirect\.com)/\S+",
     re.IGNORECASE
 )
 
@@ -50,7 +50,7 @@ def extract_dois(text: str) -> list[str]:
     # Extract DOIs from doi.org URLs
     url_dois = [m[1] for m in DOI_URL_REGEX.findall(text)]
     
-    # Extract DOIs from direct article links (Springer, IEEE, ACM, etc.)
+    # Extract DOIs from direct article links (IEEE, ScienceDirect)
     direct_link_dois = [m[1] for m in DIRECT_LINK_WITH_DOI_REGEX.findall(text)]
     
     # Extract plain DOIs from text
@@ -71,11 +71,11 @@ def extract_dois(text: str) -> list[str]:
     return unique
 
 def has_direct_link_without_doi(text: str) -> bool:
-    """Check if message contains direct article links WITHOUT any DOI (embedded or separate)."""
+    """Check if message contains IEEE/ScienceDirect links WITHOUT any DOI (embedded or separate)."""
     if not text:
         return False
     
-    # Check if there are any direct links
+    # Check if there are any IEEE or ScienceDirect links
     direct_links = DIRECT_LINK_REGEX.findall(text)
     if not direct_links:
         return False
@@ -221,12 +221,12 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     user_name = user.first_name or "Unknown"
     
-    # RULE 0: Check for direct links WITHOUT any DOI (highest priority)
+    # RULE 0: Check for IEEE/ScienceDirect links WITHOUT any DOI (highest priority)
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
         asyncio.create_task(delete_and_warn(
             context, msg, chat.id, user.id, user_name,
-            "please include the DOI when sharing article links (IEEE, ACM, Springer, etc.)."
+            "please include the DOI when sharing IEEE or ScienceDirect links."
         ))
         return
 
@@ -310,7 +310,7 @@ def main() -> None:
     print("="*70)
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
-    print(f"   Direct links: Allowed WITH embedded DOI")
+    print(f"   Direct link check: IEEE, ScienceDirect only")
     print(f"   Language: Any English text required")
     print(f"   Bot status: {'ACTIVE' if bot_active else 'INACTIVE'}")
     print(f"   Admin commands: /start, /stop")
