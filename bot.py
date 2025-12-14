@@ -297,7 +297,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     message_id = msg.message_id
-    message_text = msg.text
     
     # Wait 3 seconds before processing to let anti-spam bots act first
     await asyncio.sleep(3)
@@ -329,13 +328,12 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     dois = extract_dois(msg.text)
     
-    # Debug: print what we found
-    if dois:
-        print(f"🔍 DEBUG: Found {len(dois)} DOI(s): {dois}")
-        print(f"🔍 DEBUG: Message text: {msg.text[:100]}")
-    
     if not dois:
         return
+    
+    # Debug: print what we found
+    print(f"🔍 DEBUG: Found {len(dois)} DOI(s): {dois}")
+    print(f"🔍 DEBUG: Message text: {msg.text[:100]}")
 
     # RULE 1: Check for Persian-only text (before checking if DOI-only)
     if has_only_persian_text(msg.text, dois):
