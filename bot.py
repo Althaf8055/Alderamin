@@ -296,6 +296,27 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not (msg and chat and user and msg.text) or chat.id not in TARGET_GROUP_IDS:
         return
 
+    message_id = msg.message_id
+    
+    # Wait 3 seconds before processing to let anti-spam bots act first
+    await asyncio.sleep(3)
+    
+    # Try to check if message still exists by attempting to copy it
+    try:
+        # Try to copy the message to the same chat (then immediately delete the copy)
+        # If the original was deleted, this will raise an error
+        copied = await context.bot.copy_message(
+            chat_id=chat.id,
+            from_chat_id=chat.id,
+            message_id=message_id
+        )
+        # Delete the copy immediately
+        await context.bot.delete_message(chat_id=chat.id, message_id=copied.message_id)
+    except Exception as e:
+        # Message was deleted by another bot, stop processing
+        print(f"⚠️ Message {message_id} was deleted by anti-spam bot, skipping processing")
+        return
+
     user_name = user.first_name or "Unknown"
     
     # RULE 0: Check for article links WITHOUT any DOI
@@ -368,7 +389,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ))
         return
 
-    # VALID request (ONLY here we count)
+    # VALID request - log immediately (no more delayed logging needed)
     log_user_request(user.id, doi)
     request_count += 1
     admin_badge = " [ADMIN]" if is_user_admin else ""
@@ -417,6 +438,7 @@ def main() -> None:
     print("="*70)
     print("🤖 DOI MODERATION BOT STARTED")
     print("="*70)
+    print(f"   Message processing delay: 3 seconds")
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
     print(f"   Direct link check: IEEE, ScienceDirect, Springer")
