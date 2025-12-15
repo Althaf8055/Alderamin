@@ -282,6 +282,22 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except:
         pass
 
+async def message_still_exists(context, chat_id: int, message_id: int) -> bool:
+    """Check if a message still exists by trying to forward it to the same chat."""
+    try:
+        # Try to forward the message to the same chat (more reliable than copy)
+        forwarded = await context.bot.forward_message(
+            chat_id=chat_id,
+            from_chat_id=chat_id,
+            message_id=message_id
+        )
+        # Delete the forwarded copy immediately
+        await context.bot.delete_message(chat_id=chat_id, message_id=forwarded.message_id)
+        return True
+    except Exception as e:
+        # Message doesn't exist or can't be accessed
+        return False
+
 async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Process messages."""
     global request_count
@@ -297,28 +313,16 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     message_id = msg.message_id
+    user_name = user.first_name or "Unknown"
     
     # Wait 3 seconds before processing to let anti-spam bots act first
     await asyncio.sleep(3)
     
-    # Try to check if message still exists by attempting to copy it
-    try:
-        # Try to copy the message to the same chat (then immediately delete the copy)
-        # If the original was deleted, this will raise an error
-        copied = await context.bot.copy_message(
-            chat_id=chat.id,
-            from_chat_id=chat.id,
-            message_id=message_id
-        )
-        # Delete the copy immediately
-        await context.bot.delete_message(chat_id=chat.id, message_id=copied.message_id)
-    except Exception as e:
-        # Message was deleted by another bot, stop processing
-        print(f"⚠️ Message {message_id} was deleted by anti-spam bot, skipping processing")
+    # Check if message still exists after the delay
+    if not await message_still_exists(context, chat.id, message_id):
+        print(f"⚠️ Message {message_id} from {user_name} ({user.id}) was deleted by anti-spam bot, skipping processing")
         return
 
-    user_name = user.first_name or "Unknown"
-    
     # RULE 0: Check for article links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
@@ -330,15 +334,13 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     dois = extract_dois(msg.text)
     
-    # Debug: print what we found
     if dois:
         print(f"🔍 DEBUG: Found {len(dois)} DOI(s): {dois}")
-        print(f"🔍 DEBUG: Message text: {msg.text[:100]}")
     
     if not dois:
         return
 
-    # RULE 1: Check for Persian-only text (before checking if DOI-only)
+    # RULE 1: Check for Persian-only text
     if has_only_persian_text(msg.text, dois):
         log_status("REJECTED", user_name, user.id, dois[0], "Persian text only")
         asyncio.create_task(delete_and_warn(
@@ -368,10 +370,10 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     doi = dois[0]
 
-    # Check if user is admin (admins bypass all rate limits)
+    # Check if user is admin
     is_user_admin = await is_admin(context, chat.id, user.id)
 
-    # RULE 4: Duplicate DOI check (same user, same day) - skip for admins
+    # RULE 4: Duplicate DOI check - skip for admins
     if not is_user_admin and has_duplicate_doi_today(user.id, doi):
         log_status("REJECTED", user_name, user.id, doi, "Duplicate DOI")
         asyncio.create_task(delete_and_warn(
@@ -380,7 +382,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ))
         return
 
-    # RULE 5: Daily limit check (only for valid requests) - skip for admins
+    # RULE 5: Daily limit check - skip for admins
     if not is_user_admin and user_request_count(user.id) >= MAX_REQUESTS_PER_DAY:
         log_status("REJECTED", user_name, user.id, doi, "Daily limit reached")
         asyncio.create_task(delete_and_warn(
@@ -389,7 +391,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ))
         return
 
-    # VALID request - log immediately (no more delayed logging needed)
+    # VALID request - log immediately
     log_user_request(user.id, doi)
     request_count += 1
     admin_badge = " [ADMIN]" if is_user_admin else ""
@@ -410,7 +412,7 @@ async def delete_and_warn(context, message, chat_id, user_id, user_name, warning
         await asyncio.sleep(WARNING_TTL)
         await msg.delete()
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error in delete_and_warn: {e}")
 
 def main() -> None:
     """Run bot."""
