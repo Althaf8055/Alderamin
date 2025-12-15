@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, Con
 # Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
-WARNING_TTL = 60*5
+WARNING_TTL = 60*10
 
 # Parse group IDs from comma-separated string
 TARGET_GROUP_IDS = []
@@ -28,8 +28,15 @@ DOI_URL_REGEX = re.compile(r"https?://(dx\.)?doi\.org/(10\.\d{4,9}/[-._;()/:A-Z0
 CLEANUP_REGEX = re.compile(r"\bdoi\s*:\s*|[^\w]", re.IGNORECASE)
 DOI_IN_URL_REGEX = re.compile(r"https?://[^\s/]+/[^\s]*(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 DIRECT_LINK_REGEX = re.compile(
-    r"https?://(www\.)?(ieeexplore\.ieee\.org|sciencedirect\.com|linkinghub\.elsevier\.com|link\.springer\.com|springer\.com|"
-    r"pubmed\.ncbi\.nlm\.nih\.gov|ncbi\.nlm\.nih\.gov/pubmed|nature\.com)/\S+",
+    r"https?://(www\.)?("
+    r"ieeexplore\.ieee\.org|"
+    r"sciencedirect\.com|"
+    r"linkinghub\.elsevier\.com|"
+    r"link\.springer\.com|"
+    r"springer\.com|"
+    r"(pubmed|pmc|ncbi)\.ncbi\.nlm\.nih\.gov|"
+    r"nature\.com"
+    r")/\S+",
     re.IGNORECASE
 )
 PERSIAN_REGEX = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+')
