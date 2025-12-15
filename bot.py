@@ -398,7 +398,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if deleted:
             asyncio.create_task(send_warning(
                 context, chat.id, user.id, user_name,
-                "شما قبلاً این مقاله را امروز درخواست کرده‌اید"
+                "درخواست تکراری نفرستید"
             ))
         else:
             print(f"⚠️ Duplicate message {message_id} was already deleted by verification bot")
