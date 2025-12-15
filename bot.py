@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, Con
 # Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
-WARNING_TTL = 60*10
+WARNING_TTL = 60*5
 
 # Parse group IDs from comma-separated string
 TARGET_GROUP_IDS = []
