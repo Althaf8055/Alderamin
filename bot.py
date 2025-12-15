@@ -33,8 +33,9 @@ DOI_IN_URL_REGEX = re.compile(
     re.IGNORECASE
 )
 
+# Direct links pattern (IEEE, ScienceDirect, Springer, PubMed, Nature, etc.)
 DIRECT_LINK_REGEX = re.compile(
-    r"https?://(www\.)?(ieeexplore\.ieee\.org|sciencedirect\.com|link\.springer\.com|springer\.com|"
+    r"https?://(www\.)?(ieeexplore\.ieee\.org|sciencedirect\.com|linkinghub\.elsevier\.com|link\.springer\.com|springer\.com|"
     r"pubmed\.ncbi\.nlm\.nih\.gov|ncbi\.nlm\.nih\.gov/pubmed|nature\.com)/\S+",
     re.IGNORECASE
 )
