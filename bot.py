@@ -219,22 +219,23 @@ async def is_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: in
         return False
 
 async def message_still_exists(context, chat_id: int, message_id: int) -> bool:
-    """Check if a message still exists by trying to react to it."""
+    """Check if a message still exists by trying to copy it."""
     try:
-        # Try to get the message - this is the most reliable check
-        await context.bot.forward_message(
+        # Try to copy the message - most reliable way to check existence
+        copied = await context.bot.copy_message(
             chat_id=chat_id,
             from_chat_id=chat_id,
             message_id=message_id
         )
-        # If forward succeeds, message exists - delete the forwarded copy
-        # (forwarded message will be the next message_id)
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id + 1)
-        except:
-            pass
+        # If copy succeeds, delete the copy immediately
+        await context.bot.delete_message(chat_id=chat_id, message_id=copied.message_id)
         return True
-    except Exception:
+    except Exception as e:
+        # Message doesn't exist
+        error_str = str(e).lower()
+        if "message to copy not found" in error_str or "message not found" in error_str:
+            return False
+        # Other errors - assume message doesn't exist to be safe
         return False
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -322,17 +323,22 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await asyncio.sleep(3)
     
     # Check if message still exists (verification bot may have deleted it)
-    if not await message_still_exists(context, chat.id, message_id):
+    exists = await message_still_exists(context, chat.id, message_id)
+    print(f"🔍 Message {message_id} existence check: {exists}")
+    
+    if not exists:
         print(f"⚠️ Message {message_id} from {user_name} ({user.id}) was deleted by verification bot - NOT PROCESSING")
         return
 
     # RULE 0: Check for article links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
-        asyncio.create_task(delete_and_warn(
-            context, msg, chat.id, user.id, user_name,
-            "لطفاً عنوان مقاله و doi مقاله را در درخواست خود اضافه کنید"
-        ))
+        deleted = await try_delete_message(context, msg)
+        if deleted:
+            asyncio.create_task(send_warning(
+                context, chat.id, user.id, user_name,
+                "لطفاً عنوان مقاله و doi مقاله را در درخواست خود اضافه کنید"
+            ))
         return
 
     dois = extract_dois(msg.text)
@@ -348,29 +354,35 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # RULE 1: Check for Persian-only text (before checking if DOI-only)
     if has_only_persian_text(msg.text, dois):
         log_status("REJECTED", user_name, user.id, dois[0], "Persian text only")
-        asyncio.create_task(delete_and_warn(
-            context, msg, chat.id, user.id, user_name,
-            "لطفاً عنوان مقاله را به درخواست خود اضافه کنید"
-        ))
+        deleted = await try_delete_message(context, msg)
+        if deleted:
+            asyncio.create_task(send_warning(
+                context, chat.id, user.id, user_name,
+                "لطفاً عنوان مقاله را به درخواست خود اضافه کنید"
+            ))
         return
 
     # RULE 2: Missing title entirely
     if is_doi_only_message(msg.text, dois):
         log_status("REJECTED", user_name, user.id, dois[0], "No title")
-        asyncio.create_task(delete_and_warn(
-            context, msg, chat.id, user.id, user_name,
-            "لطفاً عنوان مقاله را به درخواست خود اضافه کنید"
-        ))
+        deleted = await try_delete_message(context, msg)
+        if deleted:
+            asyncio.create_task(send_warning(
+                context, chat.id, user.id, user_name,
+                "لطفاً عنوان مقاله را به درخواست خود اضافه کنید"
+            ))
         return
 
     # RULE 3: Multiple DOIs
     unique_dois = len(set(d.lower() for d in dois))
     if unique_dois > 1:
         log_status("REJECTED", user_name, user.id, ", ".join(dois[:2]), f"{unique_dois} DOIs")
-        asyncio.create_task(delete_and_warn(
-            context, msg, chat.id, user.id, user_name,
-            "لطفاً درخواست خود را به دو پیام جداگانه ارسال کنید. شما می‌توانید حداکثر دو مقاله در روز درخواست کنید"
-        ))
+        deleted = await try_delete_message(context, msg)
+        if deleted:
+            asyncio.create_task(send_warning(
+                context, chat.id, user.id, user_name,
+                "لطفاً درخواست خود را به دو پیام جداگانه ارسال کنید. شما می‌توانید حداکثر دو مقاله در روز درخواست کنید"
+            ))
         return
 
     doi = dois[0]
@@ -381,43 +393,69 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # RULE 4: Duplicate DOI check (same user, same day) - skip for admins
     if not is_user_admin and has_duplicate_doi_today(user.id, doi):
         log_status("REJECTED", user_name, user.id, doi, "Duplicate DOI")
-        asyncio.create_task(delete_and_warn(
-            context, msg, chat.id, user.id, user_name,
-            "شما قبلاً این مقاله را امروز درخواست کرده‌اید"
-        ))
+        # Try to delete - if it fails, the verification bot already deleted it
+        deleted = await try_delete_message(context, msg)
+        if deleted:
+            asyncio.create_task(send_warning(
+                context, chat.id, user.id, user_name,
+                "شما قبلاً این مقاله را امروز درخواست کرده‌اید"
+            ))
+        else:
+            print(f"⚠️ Duplicate message {message_id} was already deleted by verification bot")
         return
 
     # RULE 5: Daily limit check (only for valid requests) - skip for admins
     if not is_user_admin and user_request_count(user.id) >= MAX_REQUESTS_PER_DAY:
         log_status("REJECTED", user_name, user.id, doi, "Daily limit reached")
-        asyncio.create_task(delete_and_warn(
-            context, msg, chat.id, user.id, user_name,
-            "روزانه فقط دو مقاله میتونید درخواست بدین"
-        ))
+        # Try to delete - if it fails, the verification bot already deleted it
+        deleted = await try_delete_message(context, msg)
+        if deleted:
+            asyncio.create_task(send_warning(
+                context, chat.id, user.id, user_name,
+                "روزانه فقط دو مقاله میتونید درخواست بدین"
+            ))
+        else:
+            print(f"⚠️ Limit-exceeded message {message_id} was already deleted by verification bot")
         return
 
-    # VALID request - log it (message passes all checks and still exists)
+    # VALID request - Check if message still exists before logging
+    # This is the critical check - only log if message wasn't deleted by verification bot
+    exists = await message_still_exists(context, chat.id, message_id)
+    if not exists:
+        print(f"⚠️ Valid message {message_id} from {user_name} ({user.id}) was deleted by verification bot - NOT LOGGING")
+        return
+    
+    # Message exists and is valid - log it
     log_user_request(user.id, doi)
     request_count += 1
     admin_badge = " [ADMIN]" if is_user_admin else ""
     log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge}")
 
-async def delete_and_warn(context, message, chat_id, user_id, user_name, warning_text):
-    """Delete and warn asynchronously."""
+async def try_delete_message(context, message) -> bool:
+    """Try to delete a message. Returns True if successful, False if already deleted."""
     try:
         await message.delete()
-        
+        return True
+    except Exception as e:
+        error_str = str(e).lower()
+        if "message to delete not found" in error_str or "message not found" in error_str:
+            return False
+        print(f"Error deleting message: {e}")
+        return False
+
+async def send_warning(context, chat_id, user_id, user_name, warning_text):
+    """Send a warning message that auto-deletes."""
+    try:
         mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
         msg = await context.bot.send_message(
             chat_id=chat_id,
             text=f"🚫 {mention}, {warning_text}",
             parse_mode="HTML"
         )
-        
         await asyncio.sleep(WARNING_TTL)
         await msg.delete()
     except Exception as e:
-        print(f"Error in delete_and_warn: {e}")
+        print(f"Error sending warning: {e}")
 
 def main() -> None:
     """Run bot."""
