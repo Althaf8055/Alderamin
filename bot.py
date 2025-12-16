@@ -35,7 +35,9 @@ DIRECT_LINK_REGEX = re.compile(
     r"link\.springer\.com|"
     r"springer\.com|"
     r"(pubmed|pmc|ncbi)\.ncbi\.nlm\.nih\.gov|"
-    r"nature\.com"
+    r"nature\.com|"
+    r"researchgate\.net|"
+    r"semanticscholar\.org"
     r")/\S+",
     re.IGNORECASE
 )
