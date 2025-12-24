@@ -29,7 +29,7 @@ CLEANUP_REGEX = re.compile(r"\bdoi\s*:\s*|[^\w]", re.IGNORECASE)
 DOI_IN_URL_REGEX = re.compile(r"https?://[^\s/]+/[^\s]*(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 DIRECT_LINK_REGEX = re.compile(
     r"https?://(www\.)?("
-    r"ieeexplore\.ieee\.org/document/\d+|"
+    r"ieeexplore\.ieee\.org/document/|"
     r"sciencedirect\.com|"
     r"linkinghub\.elsevier\.com|"
     r"link\.springer\.com|"
