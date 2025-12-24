@@ -29,7 +29,7 @@ CLEANUP_REGEX = re.compile(r"\bdoi\s*:\s*|[^\w]", re.IGNORECASE)
 DOI_IN_URL_REGEX = re.compile(r"https?://[^\s/]+/[^\s]*(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 DIRECT_LINK_REGEX = re.compile(
     r"https?://(www\.)?("
-    r"ieeexplore\.ieee\.org|"
+    r"ieeexplore\.ieee\.org/document/\d+|"
     r"sciencedirect\.com|"
     r"linkinghub\.elsevier\.com|"
     r"link\.springer\.com|"
@@ -39,10 +39,11 @@ DIRECT_LINK_REGEX = re.compile(
     r"researchgate\.net|"
     r"semanticscholar\.org|"
     r"emerald\.com|"
-    r"ascelibrary\.org"  # <-- Add this
-    r")/\S+",
+    r"ascelibrary\.org"
+    r")/\S*",
     re.IGNORECASE
 )
+
 PERSIAN_REGEX = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+')
 ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
 
