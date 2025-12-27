@@ -39,7 +39,8 @@ DIRECT_LINK_REGEX = re.compile(
     r"researchgate\.net|"
     r"semanticscholar\.org|"
     r"emerald\.com|"
-    r"ascelibrary\.org"
+    r"ascelibrary\.org|"
+    r"share\.google"
     r")(/\S*)?",
     re.IGNORECASE
 )
