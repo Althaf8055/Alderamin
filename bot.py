@@ -34,6 +34,7 @@ DIRECT_LINK_REGEX = re.compile(
     r"linkinghub\.elsevier\.com|"
     r"link\.springer\.com|"
     r"springer\.com|"
+    r"connect\.springerpub\.com|"
     r"(pubmed|pmc|ncbi)\.ncbi\.nlm\.nih\.gov|"
     r"nature\.com|"
     r"researchgate\.net|"
