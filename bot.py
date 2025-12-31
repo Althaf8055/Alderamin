@@ -1,6 +1,7 @@
 import re
 import asyncio
 import os
+os.environ["HTTPX_FORCE_IPV4"] = "1"
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
