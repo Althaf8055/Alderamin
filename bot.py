@@ -9,8 +9,8 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
 # Environment variables
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
+BOT_TOKEN="8462579859:AAGYnZZlm4GxZLY0j_wUihOXk8JNjwIiErM"
+GROUP_IDS="-1003271596458"
 WARNING_TTL = 60*5
 
 # Parse group IDs from comma-separated string
