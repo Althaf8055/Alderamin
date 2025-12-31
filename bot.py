@@ -330,7 +330,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # Wait 3 seconds before processing to let anti-spam bots act first (skip for edits)
     if not is_edit:
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(3)
 
     # RULE 0: Check for article links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
