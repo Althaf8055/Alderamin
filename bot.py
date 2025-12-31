@@ -11,7 +11,10 @@ import asyncio
 # Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., "https://yourdomain.com"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # e.g., "https://yourdomain.com"
+# Ensure HTTPS prefix
+if WEBHOOK_URL and not WEBHOOK_URL.startswith("http"):
+    WEBHOOK_URL = f"https://{WEBHOOK_URL}"
 PORT = int(os.getenv("PORT", "8443"))
 WARNING_TTL = 60*5
 
@@ -617,7 +620,7 @@ def init_bot_app():
         .build()
 
 def main():
-    """Run the webhook server."""
+    """Initialize the application."""
     if not BOT_TOKEN:
         print("❌ ERROR: BOT_TOKEN environment variable not set!")
         return
@@ -656,9 +659,10 @@ def main():
     print("="*70)
     print(f"\n💡 To manually setup webhook, visit: {WEBHOOK_URL}/setup_webhook")
     print()
-    
-    # Run Flask app
-    app.run(host='0.0.0.0', port=PORT, debug=False)
+
+# Initialize when module is imported (for gunicorn)
+main()
 
 if __name__ == "__main__":
-    main()
+    # Only run Flask dev server if executed directly
+    app.run(host='0.0.0.0', port=PORT, debug=False)
