@@ -7,12 +7,11 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes
 from flask import Flask, request, Response
 import asyncio
-from threading import Thread
 
 # Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., "https://yourdomain.com/webhook"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., "https://yourdomain.com"
 PORT = int(os.getenv("PORT", "8443"))
 WARNING_TTL = 60*5
 
@@ -62,6 +61,7 @@ app = Flask(__name__)
 
 # Global bot application
 bot_app = None
+webhook_setup_done = False
 
 def init_db():
     """Initialize SQLite database with message_id column."""
@@ -77,7 +77,6 @@ def init_db():
         )
     """)
     
-    # Check if message_id column exists
     c.execute("PRAGMA table_info(requests)")
     columns = [row[1] for row in c.fetchall()]
     
@@ -157,12 +156,10 @@ def extract_dois(text: str) -> list[str]:
     if not text:
         return []
     
-    # Extract DOIs from all sources
     url_dois = [m[1] for m in DOI_URL_REGEX.findall(text)]
     link_dois = [m[1] for m in DOI_IN_URL_REGEX.findall(text)]
     plain_dois = DOI_REGEX.findall(text)
     
-    # Deduplicate and validate
     seen = set()
     unique = []
     for doi in url_dois + link_dois + plain_dois:
@@ -333,7 +330,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not is_edit:
         await asyncio.sleep(1.5)
 
-    # RULE 0: Check for article links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
         if not is_edit:
@@ -351,7 +347,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not dois:
         return
 
-    # RULE 1: Check for Persian-only text
     if has_only_persian_text(msg.text, dois):
         log_status("REJECTED", user_name, user.id, dois[0], "Persian text only")
         if not is_edit:
@@ -364,7 +359,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 ))
         return
 
-    # RULE 2: Missing title entirely
     if is_doi_only_message(msg.text, dois):
         log_status("REJECTED", user_name, user.id, dois[0], "No title")
         if not is_edit:
@@ -377,7 +371,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 ))
         return
 
-    # RULE 3: Multiple DOIs
     unique_dois = len(set(d.lower() for d in dois))
     if unique_dois > 1:
         log_status("REJECTED", user_name, user.id, ", ".join(dois[:2]), f"{unique_dois} DOIs")
@@ -413,7 +406,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 log_status("VALID", user_name, user.id, doi, f"[EDITED - No DOI change] msg_id:{message_id}")
                 return
 
-    # RULE 4: Duplicate DOI check (skip for admins)
     if not is_user_admin:
         duplicate_message_id = get_duplicate_doi_message_id(user.id, doi)
         
@@ -459,7 +451,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 log_status("UPDATED", user_name, user.id, doi, f"DOI updated from {prev_doi} | msg_id:{message_id}")
                 return
 
-    # RULE 5: Daily limit check (skip for admins and edits of existing requests)
     if not is_user_admin and not is_edit and user_request_count(user.id) >= MAX_REQUESTS_PER_DAY:
         log_status("REJECTED", user_name, user.id, doi, "Daily limit reached")
         deleted = await try_delete_message(context, msg)
@@ -471,7 +462,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ))
         return
 
-    # VALID request
     if not is_edit:
         log_user_request(user.id, doi, message_id)
         request_count += 1
@@ -519,10 +509,16 @@ async def auto_delete_warning(context, chat_id, message_id):
 
 async def handle_update(update_data):
     """Process incoming update asynchronously."""
+    global webhook_setup_done
+    
+    # Lazy webhook setup on first update
+    if not webhook_setup_done:
+        asyncio.create_task(setup_webhook_async())
+        webhook_setup_done = True
+    
     try:
         update = Update.de_json(update_data, bot_app.bot)
         
-        # Handle commands
         if update.message and update.message.text:
             if update.message.text.startswith('/start'):
                 await start_command(update, bot_app)
@@ -531,7 +527,6 @@ async def handle_update(update_data):
                 await stop_command(update, bot_app)
                 return
         
-        # Handle regular messages and edits
         await process_message(update, bot_app)
     except Exception as e:
         print(f"Error handling update: {e}")
@@ -542,7 +537,6 @@ def webhook():
     if request.method == 'POST':
         update_data = request.get_json(force=True)
         
-        # Run async handler in new event loop (Flask runs in sync context)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -557,23 +551,63 @@ def webhook():
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint."""
-    return {'status': 'ok', 'bot_active': bot_active}, 200
+    return {'status': 'ok', 'bot_active': bot_active, 'webhook_setup': webhook_setup_done}, 200
+
+@app.route('/setup_webhook', methods=['GET', 'POST'])
+def manual_webhook_setup():
+    """Manual webhook setup endpoint."""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(setup_webhook_async())
+        loop.close()
+        return {'status': 'success', 'message': result}, 200
+    except Exception as e:
+        return {'status': 'error', 'message': str(e)}, 500
 
 @app.route('/')
 def index():
     """Root endpoint."""
-    return {'message': 'DOI Moderation Bot Webhook Service'}, 200
+    return {
+        'message': 'DOI Moderation Bot Webhook Service',
+        'webhook_setup': webhook_setup_done,
+        'bot_active': bot_active
+    }, 200
 
-def setup_webhook():
-    """Set up the webhook with Telegram."""
+async def setup_webhook_async():
+    """Set up the webhook with Telegram (async, with retries)."""
+    global webhook_setup_done
+    
+    if webhook_setup_done:
+        return "Webhook already set up"
+    
+    webhook_url = f"{WEBHOOK_URL}/webhook"
+    
+    for attempt in range(3):
+        try:
+            print(f"🔄 Setting up webhook (attempt {attempt + 1}/3)...")
+            await bot_app.bot.set_webhook(webhook_url, drop_pending_updates=True)
+            print(f"✅ Webhook set to: {webhook_url}")
+            webhook_setup_done = True
+            return f"Webhook successfully set to {webhook_url}"
+        except Exception as e:
+            print(f"⚠️  Webhook setup attempt {attempt + 1} failed: {e}")
+            if attempt < 2:
+                await asyncio.sleep(5)
+            else:
+                print("⚠️  Webhook setup will be retried on first incoming update")
+                return f"Webhook setup delayed: {str(e)}"
+
+def init_bot_app():
+    """Initialize bot application without setting webhook."""
     from telegram.request import HTTPXRequest
     
     request_obj = HTTPXRequest(
         connection_pool_size=8,
-        connect_timeout=60.0,
-        read_timeout=60.0,
-        write_timeout=60.0,
-        pool_timeout=60.0,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0,
     )
     
     global bot_app
@@ -581,16 +615,6 @@ def setup_webhook():
         .token(BOT_TOKEN) \
         .request(request_obj) \
         .build()
-    
-    # Set webhook
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        webhook_url = f"{WEBHOOK_URL}/webhook"
-        loop.run_until_complete(bot_app.bot.set_webhook(webhook_url))
-        print(f"✅ Webhook set to: {webhook_url}")
-    finally:
-        loop.close()
 
 def main():
     """Run the webhook server."""
@@ -607,7 +631,7 @@ def main():
         return
     
     init_db()
-    setup_webhook()
+    init_bot_app()
     
     print("="*70)
     print("🤖 DOI MODERATION BOT WEBHOOK SERVICE STARTED")
@@ -617,6 +641,7 @@ def main():
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
     print(f"   Webhook URL: {WEBHOOK_URL}/webhook")
     print(f"   Port: {PORT}")
+    print(f"   Webhook setup: Will be done on first update or manually via /setup_webhook")
     print(f"   Direct link check: IEEE, ScienceDirect, Springer")
     print(f"   Language: Any English text required")
     print(f"   Daily limit: {MAX_REQUESTS_PER_DAY} requests per user")
@@ -629,6 +654,7 @@ def main():
     print(f"   Admin commands: /start, /stop")
     print(f"   Database: Tracking message_id for all valid requests")
     print("="*70)
+    print(f"\n💡 To manually setup webhook, visit: {WEBHOOK_URL}/setup_webhook")
     print()
     
     # Run Flask app
