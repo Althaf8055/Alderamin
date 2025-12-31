@@ -12,9 +12,11 @@ import asyncio
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # e.g., "https://yourdomain.com"
-# Ensure HTTPS prefix
-if WEBHOOK_URL and not WEBHOOK_URL.startswith("http"):
-    WEBHOOK_URL = f"https://{WEBHOOK_URL}"
+# Ensure HTTPS prefix and remove trailing slash
+if WEBHOOK_URL:
+    WEBHOOK_URL = WEBHOOK_URL.rstrip('/')
+    if not WEBHOOK_URL.startswith("http"):
+        WEBHOOK_URL = f"https://{WEBHOOK_URL}"
 PORT = int(os.getenv("PORT", "8443"))
 WARNING_TTL = 60*5
 
