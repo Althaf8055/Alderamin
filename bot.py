@@ -4,6 +4,7 @@ import os
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
@@ -21,6 +22,10 @@ if GROUP_IDS_STR:
 DB_PATH = os.getenv("DB_PATH", "requests.db")
 MAX_REQUESTS_PER_DAY = 2
 IST = timezone(timedelta(hours=5, minutes=30))
+
+# Database connection settings for better reliability
+DB_TIMEOUT = 30.0  # Increased timeout for network volumes
+DB_ISOLATION_LEVEL = None  # Autocommit mode
 
 # Compiled regex patterns
 DOI_REGEX = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
@@ -46,7 +51,6 @@ DIRECT_LINK_REGEX = re.compile(
     re.IGNORECASE
 )
 
-
 PERSIAN_REGEX = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+')
 ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
 
@@ -54,31 +58,68 @@ ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
 bot_active = True
 request_count = 0
 
+@contextmanager
+def get_db_connection():
+    """Context manager for database connections with proper error handling."""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT, isolation_level=DB_ISOLATION_LEVEL)
+        # Enable WAL mode for better concurrent access
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        yield conn
+    except sqlite3.OperationalError as e:
+        print(f"⚠️ Database connection error: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception as e:
+                print(f"⚠️ Error closing database connection: {e}")
+
 def init_db():
     """Initialize SQLite database with message_id column."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS requests (
-            user_id INTEGER,
-            doi TEXT,
-            ts INTEGER,
-            message_id INTEGER
-        )
-    """)
-    
-    # Check if message_id column exists
-    c.execute("PRAGMA table_info(requests)")
-    columns = [row[1] for row in c.fetchall()]
-    
-    if 'message_id' not in columns:
-        print("📊 Adding message_id column to existing database...")
-        c.execute("ALTER TABLE requests ADD COLUMN message_id INTEGER")
-        print("✅ message_id column added successfully")
-    
-    conn.commit()
-    conn.close()
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS requests (
+                    user_id INTEGER,
+                    doi TEXT,
+                    ts INTEGER,
+                    message_id INTEGER
+                )
+            """)
+            
+            # Check if message_id column exists
+            c.execute("PRAGMA table_info(requests)")
+            columns = [row[1] for row in c.fetchall()]
+            
+            if 'message_id' not in columns:
+                print("📊 Adding message_id column to existing database...")
+                c.execute("ALTER TABLE requests ADD COLUMN message_id INTEGER")
+                print("✅ message_id column added successfully")
+            
+            # Create index for better performance
+            c.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_ts 
+                ON requests(user_id, ts)
+            """)
+            c.execute("""
+                CREATE INDEX IF NOT EXISTS idx_message_id 
+                ON requests(message_id)
+            """)
+            
+            conn.commit()
+            print("✅ Database initialized successfully")
+    except Exception as e:
+        print(f"❌ Failed to initialize database: {e}")
+        raise
 
 def today_4am_ist_timestamp():
     """Get timestamp of today's 4 AM IST (or yesterday's if it's before 4 AM now)."""
@@ -91,57 +132,72 @@ def today_4am_ist_timestamp():
 def user_request_count(user_id: int) -> int:
     """Count user's valid requests since 4 AM IST today."""
     since = today_4am_ist_timestamp()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM requests WHERE user_id = ? AND ts >= ?", (user_id, since))
-    count = c.fetchone()[0]
-    conn.close()
-    return count
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM requests WHERE user_id = ? AND ts >= ?", (user_id, since))
+            count = c.fetchone()[0]
+            return count
+    except Exception as e:
+        print(f"⚠️ Error counting user requests: {e}")
+        return 0
 
 def get_duplicate_doi_message_id(user_id: int, doi: str) -> int | None:
     """Get the message_id of a duplicate DOI request from today, if it exists."""
     since = today_4am_ist_timestamp()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT message_id FROM requests WHERE user_id = ? AND doi = ? AND ts >= ? LIMIT 1", 
-              (user_id, doi.lower(), since))
-    result = c.fetchone()
-    conn.close()
-    return result[0] if result else None
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT message_id FROM requests WHERE user_id = ? AND doi = ? AND ts >= ? LIMIT 1", 
+                      (user_id, doi.lower(), since))
+            result = c.fetchone()
+            return result[0] if result else None
+    except Exception as e:
+        print(f"⚠️ Error checking duplicate DOI: {e}")
+        return None
 
 def delete_request_by_message_id(message_id: int):
     """Delete a request entry from the database by message_id."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM requests WHERE message_id = ?", (message_id,))
-    conn.commit()
-    conn.close()
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM requests WHERE message_id = ?", (message_id,))
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Error deleting request: {e}")
 
 def get_user_request_by_message_id(message_id: int) -> tuple[int, str] | None:
     """Get user_id and DOI for a specific message_id."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT user_id, doi FROM requests WHERE message_id = ?", (message_id,))
-    result = c.fetchone()
-    conn.close()
-    return result if result else None
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT user_id, doi FROM requests WHERE message_id = ?", (message_id,))
+            result = c.fetchone()
+            return result if result else None
+    except Exception as e:
+        print(f"⚠️ Error getting request by message_id: {e}")
+        return None
 
 def update_request_doi(message_id: int, new_doi: str):
     """Update the DOI for an existing request by message_id."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE requests SET doi = ? WHERE message_id = ?", (new_doi.lower(), message_id))
-    conn.commit()
-    conn.close()
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE requests SET doi = ? WHERE message_id = ?", (new_doi.lower(), message_id))
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Error updating request DOI: {e}")
 
 def log_user_request(user_id: int, doi: str, message_id: int):
     """Log a valid user request to the database with message_id."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO requests (user_id, doi, ts, message_id) VALUES (?, ?, ?, ?)",
-              (user_id, doi.lower(), int(time.time()), message_id))
-    conn.commit()
-    conn.close()
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO requests (user_id, doi, ts, message_id) VALUES (?, ?, ?, ?)",
+                      (user_id, doi.lower(), int(time.time()), message_id))
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Error logging user request: {e}")
 
 def extract_dois(text: str) -> list[str]:
     """Extract unique DOIs from text, including from any links."""
@@ -219,7 +275,7 @@ async def is_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: in
         member = await context.bot.get_chat_member(chat_id, user_id)
         return member.status in ['creator', 'administrator']
     except Exception as e:
-        print(f"Error checking admin status: {e}")
+        print(f"⚠️ Error checking admin status: {e}")
         return False
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -234,7 +290,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if not await is_admin(context, chat.id, user.id):
         print(f"⚠️ Non-admin {user.first_name} ({user.id}) tried to use /start")
-        # Delete command from non-admin silently
         try:
             await update.message.delete()
         except:
@@ -248,13 +303,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     print(f"   Timestamp: {timestamp}")
     print(f"{'='*70}\n")
     
-    # Delete the command message first
     try:
         await update.message.delete()
     except:
         pass
     
-    # Send confirmation to group that auto-deletes
     msg = await context.bot.send_message(
         chat_id=chat.id,
         text="✅ Bot moderation activated"
@@ -277,7 +330,6 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     if not await is_admin(context, chat.id, user.id):
         print(f"⚠️ Non-admin {user.first_name} ({user.id}) tried to use /stop")
-        # Delete command from non-admin silently
         try:
             await update.message.delete()
         except:
@@ -291,13 +343,11 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     print(f"   Timestamp: {timestamp}")
     print(f"{'='*70}\n")
     
-    # Delete the command message first
     try:
         await update.message.delete()
     except:
         pass
     
-    # Send confirmation to group that auto-deletes
     msg = await context.bot.send_message(
         chat_id=chat.id,
         text="⏸️ Bot moderation deactivated"
@@ -319,7 +369,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     chat = update.effective_chat
     user = update.effective_user
     
-    # Check if this is an edited message
     is_edit = update.edited_message is not None
 
     if not (msg and chat and user and msg.text) or chat.id not in TARGET_GROUP_IDS:
@@ -328,11 +377,9 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     message_id = msg.message_id
     user_name = user.first_name or "Unknown"
     
-    # Wait 3 seconds before processing to let anti-spam bots act first (skip for edits)
     if not is_edit:
         await asyncio.sleep(3)
 
-    # RULE 0: Check for article links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
         log_status("REJECTED", user_name, user.id, "Direct Link (No DOI)", "Missing DOI")
         if not is_edit:
@@ -350,7 +397,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not dois:
         return
 
-    # RULE 1: Check for Persian-only text
     if has_only_persian_text(msg.text, dois):
         log_status("REJECTED", user_name, user.id, dois[0], "Persian text only")
         if not is_edit:
@@ -363,7 +409,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 ))
         return
 
-    # RULE 2: Missing title entirely
     if is_doi_only_message(msg.text, dois):
         log_status("REJECTED", user_name, user.id, dois[0], "No title")
         if not is_edit:
@@ -376,15 +421,12 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 ))
         return
 
-    # RULE 3: Multiple DOIs
     unique_dois = len(set(d.lower() for d in dois))
     if unique_dois > 1:
         log_status("REJECTED", user_name, user.id, ", ".join(dois[:2]), f"{unique_dois} DOIs")
         
-        # Always delete the message (both new and edited)
         deleted = await try_delete_message(context, msg)
         
-        # If it was an edit and in database, delete the entry too
         if is_edit and deleted:
             previous_request = get_user_request_by_message_id(message_id)
             if previous_request:
@@ -402,28 +444,21 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     doi = dois[0]
     is_user_admin = await is_admin(context, chat.id, user.id)
 
-    # Check if this message was previously logged in database (for edits)
     if is_edit:
         previous_request = get_user_request_by_message_id(message_id)
         
         if previous_request:
             prev_user_id, prev_doi = previous_request
             
-            # Check if DOI has changed
             if prev_doi.lower() != doi.lower():
-                # DOI changed - update the database temporarily and check for duplicates
                 log_status("INFO", user_name, user.id, doi, f"DOI change detected: {prev_doi} → {doi}")
-                # Don't update yet - check for duplicates first
             else:
-                # Same DOI - just log and allow (already validated)
                 log_status("VALID", user_name, user.id, doi, f"[EDITED - No DOI change] msg_id:{message_id}")
                 return
 
-    # RULE 4: Duplicate DOI check (skip for admins)
     if not is_user_admin:
         duplicate_message_id = get_duplicate_doi_message_id(user.id, doi)
         
-        # Make sure we're not flagging the message itself as duplicate
         if duplicate_message_id is not None and duplicate_message_id != message_id:
             try:
                 mention = f'<a href="tg://user?id={user.id}">{user_name}</a>'
@@ -436,11 +471,9 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 
                 log_status("REJECTED", user_name, user.id, doi, f"Duplicate DOI (original msg_id:{duplicate_message_id})")
                 
-                # Delete the new message or revert the edit
                 if not is_edit:
                     await try_delete_message(context, msg)
                 else:
-                    # If it's an edit that created a duplicate, keep the old DOI
                     previous_request = get_user_request_by_message_id(message_id)
                     if previous_request:
                         prev_user_id, prev_doi = previous_request
@@ -456,10 +489,9 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     delete_request_by_message_id(duplicate_message_id)
                     log_status("INFO", user_name, user.id, doi, f"Cleaned deleted msg_id:{duplicate_message_id} from database")
                 else:
-                    print(f"Error sending duplicate warning: {e}")
+                    print(f"⚠️ Error sending duplicate warning: {e}")
                     return
 
-    # If we reach here and it's an edit with a changed DOI, update the database
     if is_edit:
         previous_request = get_user_request_by_message_id(message_id)
         if previous_request:
@@ -469,7 +501,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 log_status("UPDATED", user_name, user.id, doi, f"DOI updated from {prev_doi} | msg_id:{message_id}")
                 return
 
-    # RULE 5: Daily limit check (skip for admins and edits of existing requests)
     if not is_user_admin and not is_edit and user_request_count(user.id) >= MAX_REQUESTS_PER_DAY:
         log_status("REJECTED", user_name, user.id, doi, "Daily limit reached")
         deleted = await try_delete_message(context, msg)
@@ -481,14 +512,12 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ))
         return
 
-    # VALID request
     if not is_edit:
         log_user_request(user.id, doi, message_id)
         request_count += 1
         admin_badge = " [ADMIN]" if is_user_admin else ""
         log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge} | msg_id:{message_id}")
     elif not get_user_request_by_message_id(message_id):
-        # This is an edit of a message that wasn't previously in the database (maybe was invalid before)
         log_user_request(user.id, doi, message_id)
         request_count += 1
         admin_badge = " [ADMIN]" if is_user_admin else ""
@@ -502,7 +531,7 @@ async def try_delete_message(context, message) -> bool:
     except Exception as e:
         if any(err in str(e).lower() for err in ["message to delete not found", "message not found"]):
             return False
-        print(f"Error deleting message: {e}")
+        print(f"⚠️ Error deleting message: {e}")
         return False
 
 async def send_warning(context, chat_id, user_id, user_name, warning_text, reply_to_message_id):
@@ -518,7 +547,7 @@ async def send_warning(context, chat_id, user_id, user_name, warning_text, reply
         await asyncio.sleep(WARNING_TTL)
         await msg.delete()
     except Exception as e:
-        print(f"Error sending warning: {e}")
+        print(f"⚠️ Error sending warning: {e}")
 
 async def auto_delete_warning(context, chat_id, message_id):
     """Auto-delete a warning message after TTL."""
@@ -526,7 +555,7 @@ async def auto_delete_warning(context, chat_id, message_id):
         await asyncio.sleep(WARNING_TTL)
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
     except Exception as e:
-        print(f"Error auto-deleting warning: {e}")
+        print(f"⚠️ Error auto-deleting warning: {e}")
 
 def main() -> None:
     """Run bot."""
@@ -538,7 +567,11 @@ def main() -> None:
         print("❌ ERROR: GROUP_IDS environment variable not set!")
         return
     
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        print(f"❌ Failed to initialize database: {e}")
+        return
     
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
@@ -552,6 +585,9 @@ def main() -> None:
     print("="*70)
     print("🤖 DOI MODERATION BOT STARTED")
     print("="*70)
+    print(f"   Database: {DB_PATH}")
+    print(f"   DB Timeout: {DB_TIMEOUT}s (optimized for network volumes)")
+    print(f"   WAL Mode: Enabled (better concurrent access)")
     print(f"   Message processing delay: 3 seconds")
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
@@ -565,7 +601,6 @@ def main() -> None:
     print(f"   Bot status: {'ACTIVE' if bot_active else 'INACTIVE'}")
     print(f"   Admin bypass: Enabled (no limits for admins)")
     print(f"   Admin commands: /start, /stop")
-    print(f"   Database: Tracking message_id for all valid requests")
     print("="*70)
     print()
     
