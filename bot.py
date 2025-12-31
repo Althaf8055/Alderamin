@@ -1,15 +1,19 @@
 import re
-import asyncio
 import os
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, ContextTypes
+from flask import Flask, request, Response
+import asyncio
+from threading import Thread
 
 # Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., "https://yourdomain.com/webhook"
+PORT = int(os.getenv("PORT", "8443"))
 WARNING_TTL = 60*5
 
 # Parse group IDs from comma-separated string
@@ -46,13 +50,18 @@ DIRECT_LINK_REGEX = re.compile(
     re.IGNORECASE
 )
 
-
 PERSIAN_REGEX = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+')
 ENGLISH_REGEX = re.compile(r'[a-zA-Z]+')
 
 # Bot state
 bot_active = True
 request_count = 0
+
+# Flask app
+app = Flask(__name__)
+
+# Global bot application
+bot_app = None
 
 def init_db():
     """Initialize SQLite database with message_id column."""
@@ -234,7 +243,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if not await is_admin(context, chat.id, user.id):
         print(f"⚠️ Non-admin {user.first_name} ({user.id}) tried to use /start")
-        # Delete command from non-admin silently
         try:
             await update.message.delete()
         except:
@@ -248,13 +256,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     print(f"   Timestamp: {timestamp}")
     print(f"{'='*70}\n")
     
-    # Delete the command message first
     try:
         await update.message.delete()
     except:
         pass
     
-    # Send confirmation to group that auto-deletes
     msg = await context.bot.send_message(
         chat_id=chat.id,
         text="✅ Bot moderation activated"
@@ -277,7 +283,6 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     if not await is_admin(context, chat.id, user.id):
         print(f"⚠️ Non-admin {user.first_name} ({user.id}) tried to use /stop")
-        # Delete command from non-admin silently
         try:
             await update.message.delete()
         except:
@@ -291,13 +296,11 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     print(f"   Timestamp: {timestamp}")
     print(f"{'='*70}\n")
     
-    # Delete the command message first
     try:
         await update.message.delete()
     except:
         pass
     
-    # Send confirmation to group that auto-deletes
     msg = await context.bot.send_message(
         chat_id=chat.id,
         text="⏸️ Bot moderation deactivated"
@@ -319,7 +322,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     chat = update.effective_chat
     user = update.effective_user
     
-    # Check if this is an edited message
     is_edit = update.edited_message is not None
 
     if not (msg and chat and user and msg.text) or chat.id not in TARGET_GROUP_IDS:
@@ -328,7 +330,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     message_id = msg.message_id
     user_name = user.first_name or "Unknown"
     
-    # Wait 3 seconds before processing to let anti-spam bots act first (skip for edits)
     if not is_edit:
         await asyncio.sleep(1.5)
 
@@ -381,10 +382,8 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if unique_dois > 1:
         log_status("REJECTED", user_name, user.id, ", ".join(dois[:2]), f"{unique_dois} DOIs")
         
-        # Always delete the message (both new and edited)
         deleted = await try_delete_message(context, msg)
         
-        # If it was an edit and in database, delete the entry too
         if is_edit and deleted:
             previous_request = get_user_request_by_message_id(message_id)
             if previous_request:
@@ -402,20 +401,15 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     doi = dois[0]
     is_user_admin = await is_admin(context, chat.id, user.id)
 
-    # Check if this message was previously logged in database (for edits)
     if is_edit:
         previous_request = get_user_request_by_message_id(message_id)
         
         if previous_request:
             prev_user_id, prev_doi = previous_request
             
-            # Check if DOI has changed
             if prev_doi.lower() != doi.lower():
-                # DOI changed - update the database temporarily and check for duplicates
                 log_status("INFO", user_name, user.id, doi, f"DOI change detected: {prev_doi} → {doi}")
-                # Don't update yet - check for duplicates first
             else:
-                # Same DOI - just log and allow (already validated)
                 log_status("VALID", user_name, user.id, doi, f"[EDITED - No DOI change] msg_id:{message_id}")
                 return
 
@@ -423,7 +417,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not is_user_admin:
         duplicate_message_id = get_duplicate_doi_message_id(user.id, doi)
         
-        # Make sure we're not flagging the message itself as duplicate
         if duplicate_message_id is not None and duplicate_message_id != message_id:
             try:
                 mention = f'<a href="tg://user?id={user.id}">{user_name}</a>'
@@ -436,11 +429,9 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 
                 log_status("REJECTED", user_name, user.id, doi, f"Duplicate DOI (original msg_id:{duplicate_message_id})")
                 
-                # Delete the new message or revert the edit
                 if not is_edit:
                     await try_delete_message(context, msg)
                 else:
-                    # If it's an edit that created a duplicate, keep the old DOI
                     previous_request = get_user_request_by_message_id(message_id)
                     if previous_request:
                         prev_user_id, prev_doi = previous_request
@@ -459,7 +450,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     print(f"Error sending duplicate warning: {e}")
                     return
 
-    # If we reach here and it's an edit with a changed DOI, update the database
     if is_edit:
         previous_request = get_user_request_by_message_id(message_id)
         if previous_request:
@@ -488,7 +478,6 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         admin_badge = " [ADMIN]" if is_user_admin else ""
         log_status("VALID", user_name, user.id, doi, f"Request #{request_count}{admin_badge} | msg_id:{message_id}")
     elif not get_user_request_by_message_id(message_id):
-        # This is an edit of a message that wasn't previously in the database (maybe was invalid before)
         log_user_request(user.id, doi, message_id)
         request_count += 1
         admin_badge = " [ADMIN]" if is_user_admin else ""
@@ -528,8 +517,83 @@ async def auto_delete_warning(context, chat_id, message_id):
     except Exception as e:
         print(f"Error auto-deleting warning: {e}")
 
-def main() -> None:
-    """Run bot with retry logic."""
+async def handle_update(update_data):
+    """Process incoming update asynchronously."""
+    try:
+        update = Update.de_json(update_data, bot_app.bot)
+        
+        # Handle commands
+        if update.message and update.message.text:
+            if update.message.text.startswith('/start'):
+                await start_command(update, bot_app)
+                return
+            elif update.message.text.startswith('/stop'):
+                await stop_command(update, bot_app)
+                return
+        
+        # Handle regular messages and edits
+        await process_message(update, bot_app)
+    except Exception as e:
+        print(f"Error handling update: {e}")
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle incoming webhook requests."""
+    if request.method == 'POST':
+        update_data = request.get_json(force=True)
+        
+        # Run async handler in new event loop (Flask runs in sync context)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(handle_update(update_data))
+        finally:
+            loop.close()
+        
+        return Response(status=200)
+    
+    return Response(status=405)
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint."""
+    return {'status': 'ok', 'bot_active': bot_active}, 200
+
+@app.route('/')
+def index():
+    """Root endpoint."""
+    return {'message': 'DOI Moderation Bot Webhook Service'}, 200
+
+def setup_webhook():
+    """Set up the webhook with Telegram."""
+    from telegram.request import HTTPXRequest
+    
+    request_obj = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=60.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=60.0,
+    )
+    
+    global bot_app
+    bot_app = ApplicationBuilder() \
+        .token(BOT_TOKEN) \
+        .request(request_obj) \
+        .build()
+    
+    # Set webhook
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        webhook_url = f"{WEBHOOK_URL}/webhook"
+        loop.run_until_complete(bot_app.bot.set_webhook(webhook_url))
+        print(f"✅ Webhook set to: {webhook_url}")
+    finally:
+        loop.close()
+
+def main():
+    """Run the webhook server."""
     if not BOT_TOKEN:
         print("❌ ERROR: BOT_TOKEN environment variable not set!")
         return
@@ -538,37 +602,21 @@ def main() -> None:
         print("❌ ERROR: GROUP_IDS environment variable not set!")
         return
     
+    if not WEBHOOK_URL:
+        print("❌ ERROR: WEBHOOK_URL environment variable not set!")
+        return
+    
     init_db()
+    setup_webhook()
     
-    # Configure with longer timeouts and retry
-    from telegram.request import HTTPXRequest
-    
-    request = HTTPXRequest(
-        connection_pool_size=8,
-        connect_timeout=60.0,  # Increased from default 5s
-        read_timeout=60.0,
-        write_timeout=60.0,
-        pool_timeout=60.0,
-    )
-    
-    app = ApplicationBuilder() \
-        .token(BOT_TOKEN) \
-        .request(request) \
-        .build()
-    
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("stop", stop_command))
-    app.add_handler(MessageHandler(
-        (filters.TEXT & ~filters.COMMAND) | filters.UpdateType.EDITED_MESSAGE,
-        process_message
-    ))
-
     print("="*70)
-    print("🤖 DOI MODERATION BOT STARTED")
+    print("🤖 DOI MODERATION BOT WEBHOOK SERVICE STARTED")
     print("="*70)
-    print(f"   Message processing delay: 3 seconds")
+    print(f"   Message processing delay: 1.5 seconds")
     print(f"   Warning auto-delete: {WARNING_TTL} seconds")
     print(f"   Target group IDs: {', '.join(map(str, TARGET_GROUP_IDS))}")
+    print(f"   Webhook URL: {WEBHOOK_URL}/webhook")
+    print(f"   Port: {PORT}")
     print(f"   Direct link check: IEEE, ScienceDirect, Springer")
     print(f"   Language: Any English text required")
     print(f"   Daily limit: {MAX_REQUESTS_PER_DAY} requests per user")
@@ -583,28 +631,8 @@ def main() -> None:
     print("="*70)
     print()
     
-    # Retry loop with exponential backoff
-    max_retries = 5
-    retry_delay = 10
-    
-    for attempt in range(max_retries):
-        try:
-            print(f"🔄 Connection attempt {attempt + 1}/{max_retries}...")
-            app.run_polling(drop_pending_updates=True)
-            break  # If successful, exit loop
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "timeout" in error_msg or "connect" in error_msg:
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2 ** attempt)
-                    print(f"⚠️  Connection failed: {e}")
-                    print(f"⏳ Waiting {wait_time}s before retry {attempt + 2}/{max_retries}...")
-                    time.sleep(wait_time)
-                else:
-                    print(f"❌ All connection attempts failed after {max_retries} tries")
-                    raise
-            else:
-                raise
+    # Run Flask app
+    app.run(host='0.0.0.0', port=PORT, debug=False)
 
 if __name__ == "__main__":
     main()
