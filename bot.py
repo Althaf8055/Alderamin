@@ -330,7 +330,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # Wait 3 seconds before processing to let anti-spam bots act first (skip for edits)
     if not is_edit:
-        await asyncio.sleep(3)
+        await asyncio.sleep(1.5)
 
     # RULE 0: Check for article links WITHOUT any DOI
     if has_direct_link_without_doi(msg.text):
@@ -529,7 +529,7 @@ async def auto_delete_warning(context, chat_id, message_id):
         print(f"Error auto-deleting warning: {e}")
 
 def main() -> None:
-    """Run bot."""
+    """Run bot with retry logic."""
     if not BOT_TOKEN:
         print("❌ ERROR: BOT_TOKEN environment variable not set!")
         return
@@ -540,7 +540,21 @@ def main() -> None:
     
     init_db()
     
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # Configure with longer timeouts and retry
+    from telegram.request import HTTPXRequest
+    
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=60.0,  # Increased from default 5s
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=60.0,
+    )
+    
+    app = ApplicationBuilder() \
+        .token(BOT_TOKEN) \
+        .request(request) \
+        .build()
     
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stop", stop_command))
@@ -569,7 +583,28 @@ def main() -> None:
     print("="*70)
     print()
     
-    app.run_polling()
+    # Retry loop with exponential backoff
+    max_retries = 5
+    retry_delay = 10
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"🔄 Connection attempt {attempt + 1}/{max_retries}...")
+            app.run_polling(drop_pending_updates=True)
+            break  # If successful, exit loop
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "timeout" in error_msg or "connect" in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    print(f"⚠️  Connection failed: {e}")
+                    print(f"⏳ Waiting {wait_time}s before retry {attempt + 2}/{max_retries}...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"❌ All connection attempts failed after {max_retries} tries")
+                    raise
+            else:
+                raise
 
 if __name__ == "__main__":
     main()
