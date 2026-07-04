@@ -19,7 +19,7 @@ if GROUP_IDS_STR:
 
 # Daily limit configuration
 DB_PATH = os.getenv("DB_PATH", "requests.db")
-MAX_REQUESTS_PER_DAY = 2
+MAX_REQUESTS_PER_DAY = 3
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # Compiled regex patterns
@@ -358,7 +358,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if deleted:
                 asyncio.create_task(send_warning(
                     context, chat.id, user.id, user_name,
-                    "لطفاً عنوان مقاله را به درخواست خود اضافه کنید",
+                    "لطفا عنوان مقاله را به درخواست خود اضافه کنید. در هر پیام، یک DOI به همراه عنوان مربوط به همان DOI ذکر شود. سایر قوانین گروه پین شده‌اند.",
                     None
                 ))
         return
@@ -371,7 +371,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if deleted:
                 asyncio.create_task(send_warning(
                     context, chat.id, user.id, user_name,
-                    "لطفاً عنوان مقاله را به درخواست خود اضافه کنید",
+                    "لطفا عنوان مقاله را به درخواست خود اضافه کنید. در هر پیام، یک DOI به همراه عنوان مربوط به همان DOI ذکر شود. سایر قوانین گروه پین شده‌اند.",
                     None
                 ))
         return
@@ -476,7 +476,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if deleted:
             asyncio.create_task(send_warning(
                 context, chat.id, user.id, user_name,
-                "روزانه فقط دو مقاله میتونید درخواست بدین",
+                "تعداد مقالات درخواستی در هر روز برای هر عضو، سه مقاله است. سایر قوانین گروه پین شده‌اند.",
                 None
             ))
         return
