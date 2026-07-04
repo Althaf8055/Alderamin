@@ -340,7 +340,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if deleted:
                 asyncio.create_task(send_warning(
                     context, chat.id, user.id, user_name,
-                    "مقاله همزمان در یک درخواست ارسال نمایید doi عنوان لاتین مقاله و",
+                    "لطفا در هر پیام، یک شناسه (doi) و عنوان مربوط به آن شناسه (title) را ارسال نمایید و از ارسال سایر لینک‌ها خودداری کنید. سایر قوانین گروه پین شده‌اند.",
                     None
                 ))
         return
