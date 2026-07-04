@@ -394,8 +394,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if deleted:
             asyncio.create_task(send_warning(
                 context, chat.id, user.id, user_name,
-                "لطفاً در هر درخواست، تنها یک عنوان + شناسه (DOI) همان
-                ",
+                "لطفاً در هر درخواست، تنها یک عنوان + شناسه (DOI) همان مقاله را قرار دهید. پیام‌هایی با درخواست بیش از یک مقاله، حذف خواهندشد. همچنین توجه داشته باشید که تعداد مقاله‌ی درخواستی در روز، برای هر کاربر سه مقاله است. سایر قوانین گروه پین شده‌اند.",
                 None
             ))
         return
@@ -512,7 +511,7 @@ async def send_warning(context, chat_id, user_id, user_name, warning_text, reply
         mention = f'<a href="tg://user?id={user_id}">{user_name}</a>'
         msg = await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🚫 {mention}, {warning_text}",
+            text=f"\u200f🚫 {mention}\n\u200f{warning_text}",
             parse_mode="HTML",
             reply_to_message_id=reply_to_message_id
         )
