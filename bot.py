@@ -340,7 +340,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if deleted:
                 asyncio.create_task(send_warning(
                     context, chat.id, user.id, user_name,
-                    "لطفاً عنوان مقاله و doi مقاله را در درخواست خود اضافه کنید",
+                    "مقاله همزمان در یک درخواست ارسال نمایید doi عنوان لاتین مقاله و",
                     None
                 ))
         return
