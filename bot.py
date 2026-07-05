@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
+
 # Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_IDS_STR = os.getenv("GROUP_IDS", "")
