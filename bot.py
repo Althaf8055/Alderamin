@@ -359,7 +359,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if deleted:
                 asyncio.create_task(send_warning(
                     context, chat.id, user.id, user_name,
-                    "لطفا عنوان مقاله را به درخواست خود اضافه کنید. در هر پیام، یک DOI به همراه عنوان مربوط به همان DOI ذکر شود. سایر قوانین گروه پین شده‌اند.",
+                    "لطفا عنوان مقاله را به درخواست خود اضافه کنید. در هر پیام، یک DOI به همراه عنوان مربوط به همان DOI ذکر شود. سایر قوانین.",
                     None
                 ))
         return
@@ -372,7 +372,7 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if deleted:
                 asyncio.create_task(send_warning(
                     context, chat.id, user.id, user_name,
-                    "لطفا عنوان مقاله را به درخواست خود اضافه کنید. در هر پیام، یک DOI به همراه عنوان مربوط به همان DOI ذکر شود. سایر قوانین گروه پین شده‌اند.",
+                    "لطفا عنوان مقاله را به درخواست خود اضافه کنید. در هر پیام، یک DOI به همراه عنوان مربوط به همان DOI ذکر شود. سایر قوانین.",
                     None
                 ))
         return
@@ -477,7 +477,9 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if deleted:
             asyncio.create_task(send_warning(
                 context, chat.id, user.id, user_name,
-                f"تعداد مقالات درخواستی در هر روز برای هر عضو، {MAX_REQUESTS_PER_DAY} مقاله است. سایر قوانین گروه پین شده‌اند.",
+                f"‏تعداد مقالات درخواستی در هر روز برای هر عضو، {MAX_REQUESTS_PER_DAY} مقاله است. 
+برای درخواست بیش از {MAX_REQUESTS_PER_DAY} مقاله یا دریافت مقالات با اولویت و سرعت بالاتر، لطفاً به آیدی @hosseini_s2026 پیام دهید.
+",
                 None
             ))
         return
