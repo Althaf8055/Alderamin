@@ -475,11 +475,10 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log_status("REJECTED", user_name, user.id, doi, "Daily limit reached")
         deleted = await try_delete_message(context, msg)
         if deleted:
-            asyncio.create_task(send_warning(
+                asyncio.create_task(send_warning(
                 context, chat.id, user.id, user_name,
-                f"‏تعداد مقالات درخواستی در هر روز برای هر عضو، {MAX_REQUESTS_PER_DAY} مقاله است. 
-برای درخواست بیش از {MAX_REQUESTS_PER_DAY} مقاله یا دریافت مقالات با اولویت و سرعت بالاتر، لطفاً به آیدی @hosseini_s2026 پیام دهید.
-",
+                f"‏تعداد مقالات درخواستی در هر روز برای هر عضو، {MAX_REQUESTS_PER_DAY} مقاله است.\n"
+                f"برای درخواست بیش از {MAX_REQUESTS_PER_DAY} مقاله یا دریافت مقالات با اولویت و سرعت بالاتر، لطفاً به آیدی @hosseini_s2026 پیام دهید.",
                 None
             ))
         return
