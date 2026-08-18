@@ -28,6 +28,13 @@ DOI_REGEX = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 DOI_URL_REGEX = re.compile(r"https?://(dx\.)?doi\.org/(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 CLEANUP_REGEX = re.compile(r"\bdoi\s*:\s*|[^\w]", re.IGNORECASE)
 DOI_IN_URL_REGEX = re.compile(r"https?://[^\s/]+/[^\s]*(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
+# Matches the bare "doi.org/" or "dx.doi.org/" domain text, with or without a scheme.
+# Needed because DOI_URL_REGEX only strips it when a scheme (https://) is present -
+# a masked link like "[doi.org/10.xxx/yyy](https://doi.org/10.xxx/yyy)" leaves the
+# visible text as just "doi.org/10.xxx/yyy" (no scheme), so without this the leftover
+# "doi.org/" domain text was being mistaken for a real title after the DOI itself was
+# stripped, letting DOI-only / Persian-only messages through.
+DOI_DOMAIN_REGEX = re.compile(r"(https?://)?(www\.)?(dx\.)?doi\.org/?", re.IGNORECASE)
 DIRECT_LINK_REGEX = re.compile(
     r"https?://(www\.)?("
     r"ieeexplore\.ieee\.org/(abstract/)?document/\d+|"
@@ -200,6 +207,7 @@ def has_only_persian_text(text: str, dois: list[str]) -> bool:
     for doi in dois:
         cleaned = cleaned.replace(doi, "").replace(doi.lower(), "")
     
+    cleaned = DOI_DOMAIN_REGEX.sub("", cleaned)
     cleaned = re.sub(r"\bdoi\s*:\s*", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'https?://\S+', '', cleaned)
     cleaned = re.sub(r'\d+', '', cleaned)
@@ -222,6 +230,7 @@ def is_doi_only_message(text: str, dois: list[str]) -> bool:
     for doi in dois:
         cleaned = cleaned.replace(doi, "").replace(doi.lower(), "")
     
+    cleaned = DOI_DOMAIN_REGEX.sub("", cleaned)
     cleaned = CLEANUP_REGEX.sub("", cleaned)
     return len(cleaned.strip()) == 0
 
