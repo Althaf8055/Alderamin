@@ -144,6 +144,23 @@ def log_user_request(user_id: int, doi: str, message_id: int):
     conn.commit()
     conn.close()
 
+def clean_doi(doi: str) -> str:
+    """Strip trailing punctuation/markdown artifacts that regex greediness can pick up.
+
+    The DOI regexes allow '(' ')' inside the match (some real DOIs contain them),
+    but that means a stray closing ')' right after a URL - e.g. from markdown link
+    syntax like '[doi.org/10.xxx/yyy](https://doi.org/10.xxx/yyy)' - gets swallowed
+    into the match. That produced two "different" DOI strings for the same link
+    (one clean, one with a trailing ')'), which falsely triggered the
+    multiple-DOIs rejection rule.
+    """
+    doi = doi.strip()
+    doi = doi.rstrip(").]},;:'\"")
+    # Drop any trailing ')' that isn't balanced by an opening '(' inside the DOI
+    while doi.endswith(')') and doi.count('(') < doi.count(')'):
+        doi = doi[:-1]
+    return doi.rstrip('/')
+
 def extract_dois(text: str) -> list[str]:
     """Extract unique DOIs from text, including from any links."""
     if not text:
@@ -157,8 +174,9 @@ def extract_dois(text: str) -> list[str]:
     # Deduplicate and validate
     seen = set()
     unique = []
-    for doi in url_dois + link_dois + plain_dois:
-        doi_normalized = doi.lower().rstrip('/')
+    for raw_doi in url_dois + link_dois + plain_dois:
+        doi = clean_doi(raw_doi)
+        doi_normalized = doi.lower()
         if re.match(r'^10\.\d{4,9}/.+', doi_normalized) and doi_normalized not in seen:
             seen.add(doi_normalized)
             unique.append(doi)
